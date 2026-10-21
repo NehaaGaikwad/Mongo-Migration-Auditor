@@ -1,0 +1,27 @@
+# Copy this file to migration-auditor.toml and adapt paths for a future check.
+# This configuration is validated in Milestone 2; no migration parser/CLI exists yet.
+
+[inputs]
+migration_paths = ["migrations"]
+baseline_path = "schema-baseline.json"
+
+[rules]
+enabled = []
+disabled = []
+
+[rules.severity_overrides]
+# "MONGO-INDEX-001" = "high"
+
+[policy]
+fail_on = "high"
+
+[audit_store]
+# Omit `uri` (or leave it empty) for the default offline mode.
+# Do not add credentials to this file. Use a local, secret .env/configuration mechanism instead.
+uri = ""
+database = "migration_auditor_metadata"
+runs_collection = "audit_runs"
+findings_collection = "audit_findings"
+server_selection_timeout_ms = 5000
+connect_timeout_ms = 5000
+retention_days = 90

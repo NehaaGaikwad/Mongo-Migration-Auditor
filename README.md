@@ -2,7 +2,7 @@
 
 A safety-focused CI/CD check for MongoDB migrations. The planned tool will inspect a deliberately small, documented subset of migration and schema/index inputs before deployment, identify known risks, and make uncertainty explicit.
 
-> **Project status:** Milestone 1 — repository and reproducible setup. The analyzer, migration parser, findings, MongoDB persistence, and CLI have not been implemented yet. This repository currently verifies the package foundation only.
+> **Project status:** Milestone 2 — typed configuration, finding/run contracts, and optional MongoDB audit persistence are implemented. The migration parser, rules, reporting CLI, and target-database preflight have not been implemented yet.
 
 ## Why this exists
 
@@ -44,7 +44,36 @@ python -m pytest
 
 On macOS/Linux, activate the environment with `source .venv/bin/activate`.
 
-The project intentionally has no runtime dependencies in Milestone 1. Development dependencies are pinned in [pyproject.toml](pyproject.toml) for repeatability.
+The runtime dependency is pinned in [pyproject.toml](pyproject.toml): PyMongo is used only when audit metadata persistence is explicitly enabled. Development dependencies are pinned there too for repeatability.
+
+## Configuration and audit metadata (Milestone 2)
+
+Copy [migration-auditor.example.toml](migration-auditor.example.toml) to `migration-auditor.toml`. The typed configuration validates input paths, the optional baseline path, rule enable/disable lists, severity overrides, policy threshold, MongoDB metadata settings, timeouts, and retention before analysis starts.
+
+```powershell
+Copy-Item migration-auditor.example.toml migration-auditor.toml
+```
+
+The sample is intentionally offline: leaving `audit_store.uri` empty selects `OfflineAuditStore`, so analysis will never require MongoDB. When a metadata URI is supplied, `MongoAuditStore` connects to a **separate auditor metadata database**, creates a unique run-ID index, lookup indexes, and TTL retention indexes, and stores only run summaries plus sanitized findings.
+
+Do not put a URI containing credentials in a committed TOML file. Supply it through an ignored local configuration mechanism or secret manager when a future CLI is added. Neither the configuration model nor connection errors expose the URI in normal error messages.
+
+The stable finding contract includes rule ID, deterministic finding ID, severity, confidence, source location, collection/field/index where known, explanation, sanitized evidence, remediation, documentation link, and suppressibility. `AuditRun` records version, timestamps, status, a configuration fingerprint, and aggregate counts—never the configuration itself or credentials.
+
+A deliberately sanitized example is available in [docs/sample-audit-record.json](docs/sample-audit-record.json). It is a schema illustration only; it contains no application documents or usable connection details.
+
+### Optional disposable MongoDB integration test
+
+Start the local service as described below, then run the opt-in test against it:
+
+```powershell
+docker compose up -d mongo
+$env:MIGRATION_AUDITOR_TEST_MONGODB_URI = "mongodb://localhost:27017"
+python -m pytest -m integration
+Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_URI
+```
+
+The test creates a randomly named database and drops only that generated database during cleanup. Regular `python -m pytest` skips this integration test when the environment variable is absent.
 
 ## Local MongoDB (optional)
 
@@ -142,7 +171,7 @@ python -m pytest
 ## Roadmap
 
 - **Milestone 1:** Repository, scope, reproducible setup — complete locally; publication evidence pending.
-- **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store.
+- **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store — complete locally; disposable-MongoDB evidence is opt-in.
 - **Milestone 3:** First CLI vertical slice using one documented input format.
 - **Milestones 4–10:** Rule catalogue, baseline analysis, read-only preflight, reporting/policy, CI integration, evaluation, and handover.
 

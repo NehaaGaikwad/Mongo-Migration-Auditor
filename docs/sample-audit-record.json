@@ -1,0 +1,38 @@
+{
+  "run": {
+    "run_id": "0e0180f6-2d01-4a0a-9dbb-2c9681e54c76",
+    "analyzer_version": "0.1.0",
+    "started_at": "2026-10-21T08:00:00+00:00",
+    "completed_at": "2026-10-21T08:00:01+00:00",
+    "status": "completed",
+    "config_fingerprint": "f3ca8bca9af9e88f5df879ea3e0a0748c4d6b7fa7f1db8954d4052b841b637d8",
+    "files_analyzed": 1,
+    "findings_count": 1,
+    "unknown_operations_count": 0
+  },
+  "findings": [
+    {
+      "finding_id": "d1f47e6b2e26fca052ca5c56",
+      "rule_id": "MONGO-INDEX-001",
+      "title": "Unique index may fail",
+      "severity": "high",
+      "confidence": "medium",
+      "location": {
+        "file": "migrations/001_add_email_index.js",
+        "line": 12,
+        "column": null,
+        "operation": "createIndex"
+      },
+      "collection": "users",
+      "field": "email",
+      "index": "email_unique",
+      "explanation": "Existing duplicate values are unknown in static analysis.",
+      "evidence": [
+        "createIndex is configured with unique: true"
+      ],
+      "remediation": "Run a bounded duplicate check in staging before deployment.",
+      "documentation_url": "https://example.invalid/rules/MONGO-INDEX-001",
+      "suppressible": true
+    }
+  ]
+}
