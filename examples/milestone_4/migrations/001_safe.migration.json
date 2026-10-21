@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {"op": "update_validator", "added_required": []},
+    {"op": "remove_field", "field": "legacy_status", "compatibility_window": true},
+    {"op": "change_field_type", "field": "age", "from_type": "string", "to_type": "int", "conversion_plan": true},
+    {"op": "backfill", "field": "status", "batched": true, "checkpointed": true, "throttled": false},
+    {"op": "increment", "field": "retry_count", "idempotent": true}
+  ]
+}

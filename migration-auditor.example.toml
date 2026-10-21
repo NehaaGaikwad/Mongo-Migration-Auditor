@@ -1,5 +1,5 @@
 # Copy this file to migration-auditor.toml and adapt paths for a `migration-auditor check` run.
-# Milestone 3 supports only `*.migration.json` declarative manifests; see README.md.
+# Milestone 4 supports only documented `*.migration.json` declarative manifests; see README.md.
 
 [inputs]
 migration_paths = ["migrations"]
@@ -10,7 +10,7 @@ enabled = []
 disabled = []
 
 [rules.severity_overrides]
-# "MONGO-INDEX-001" = "high"
+# "MONGO-SCHEMA-001" = "high"
 
 [policy]
 fail_on = "high"

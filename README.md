@@ -2,7 +2,7 @@
 
 A safety-focused CI/CD check for MongoDB migrations. The planned tool will inspect a deliberately small, documented subset of migration and schema/index inputs before deployment, identify known risks, and make uncertainty explicit.
 
-> **Project status:** Milestone 3 — an offline CLI, one safe declarative migration format, deterministic first rules, text/JSON reports, and CI-compatible exit codes are implemented. Baseline comparison, MongoDB preflight, and broader migration-framework support remain planned.
+> **Project status:** Milestone 4 — the offline CLI now detects documented validator, field-compatibility, type-change, index-operational, destructive-operation, backfill-bound, and retry-idempotency risks in the safe declarative manifest subset. Baseline comparison, MongoDB preflight, and broader migration-framework support remain planned.
 
 ## Why this exists
 
@@ -76,7 +76,7 @@ Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_URI
 
 The test creates a randomly named database and drops only that generated database during cleanup. Regular `python -m pytest` skips this integration test when the environment variable is absent.
 
-## CLI and supported migration manifests (Milestone 3)
+## CLI and supported migration manifests (Milestone 4)
 
 The first vertical slice intentionally supports only UTF-8 JSON files ending in `.migration.json`. The auditor reads data only: it never imports, runs, or evaluates JavaScript, Python, shell commands, or database migrations.
 
@@ -112,14 +112,21 @@ Supported operations are deliberately limited:
 
 | Operation | Accepted fields | Current behavior |
 | --- | --- | --- |
-| `create_index` | `op`, non-empty `keys` with non-empty field names and integer directions `1` or `-1` (not booleans/floats), optional boolean `unique`, optional non-empty string `name` | `unique: true` emits `MONGO-INDEX-001`; malformed fields emit `MONGO-ANALYSIS-001`. |
+| `create_index` | `op`, non-empty `keys` with directions `1` or `-1`, optional boolean `unique`, optional non-empty `name`, optional `build_context` (`unknown` or `high_write`) | `unique: true` emits `MONGO-INDEX-001`; `high_write` emits `MONGO-INDEX-002`. |
 | `drop_collection` | `op` only | Emits `MONGO-DATA-002`. |
+| `delete_many` | `op`, `filter_scope` (`all` or `filtered`), boolean `recovery_plan` | Emits `MONGO-DATA-002`. Raw filters are intentionally unsupported. |
+| `update_validator` | `op`, `added_required` array of unique non-empty fields | Each added field emits `MONGO-SCHEMA-001`. |
+| `remove_field` | `op`, `field`, boolean `compatibility_window` | Emits `MONGO-SCHEMA-002` when no compatibility window is declared. |
+| `rename_field` | `op`, `from`, `to`, boolean `compatibility_window` | Emits `MONGO-SCHEMA-002` when no compatibility window is declared. |
+| `change_field_type` | `op`, `field`, `from_type`, `to_type`, boolean `conversion_plan` | Emits `MONGO-SCHEMA-003` without a declared conversion plan. |
+| `backfill` | `op`, `field`, boolean `batched`, `checkpointed`, `throttled` | Emits `MONGO-DATA-001` when no execution bound is declared. |
+| `increment` | `op`, `field`, boolean `idempotent` | Emits `MONGO-EXEC-001` when retries are not idempotent. |
 
 Any unknown operation, dynamic operation, non-object operation, or unsupported field emits `MONGO-ANALYSIS-001`; it is never silently treated as safe. See [docs/rules.md](docs/rules.md) for rule rationale and remediation.
 
 ### Demo fixtures
 
-[examples/milestone_3](examples/milestone_3) contains a safe index, a blocking unique-index risk, and an unsupported dynamic operation. [warning.toml](examples/milestone_3/configs/warning.toml) checks the same unique-index fixture with a Critical-only policy, demonstrating a visible but non-blocking warning:
+[examples/milestone_3](examples/milestone_3) contains the original CLI demonstration. [examples/milestone_4](examples/milestone_4) adds safe declarations and representative Milestone 4 risks. [warning.toml](examples/milestone_3/configs/warning.toml) checks the unique-index fixture with a Critical-only policy, demonstrating a visible but non-blocking warning:
 
 ```powershell
 Set-Location examples/milestone_3
@@ -206,7 +213,8 @@ See [docs/architecture.md](docs/architecture.md) for component responsibilities 
 ```text
 src/migration_auditor/  Importable package, parser, rules, reports, and CLI
 tests/                  Automated tests
-examples/milestone_3/   Reproducible CLI demonstration fixtures
+examples/milestone_3/   Original reproducible CLI demonstration fixtures
+examples/milestone_4/   Validator, compatibility, backfill, and retry-rule fixtures
 docs/                   Architecture and decision records
 .github/workflows/      Pull request and push CI
 docker-compose.yml      Optional local MongoDB service
@@ -229,7 +237,8 @@ python -m pytest
 - **Milestone 1:** Repository, scope, reproducible setup — complete locally; publication evidence pending.
 - **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store — complete locally; disposable-MongoDB evidence is opt-in.
 - **Milestone 3:** First CLI vertical slice using one documented input format — complete locally.
-- **Milestones 4–10:** Rule catalogue, baseline analysis, read-only preflight, reporting/policy, CI integration, evaluation, and handover.
+- **Milestone 4:** Initial deterministic rule catalogue for Manifest v1 — complete locally.
+- **Milestones 5–10:** Baseline analysis, read-only preflight, reporting/policy, CI integration, evaluation, and handover.
 
 See the project master plan for the full acceptance criteria. Claims in this README reflect implemented work only.
 

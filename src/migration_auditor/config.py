@@ -10,7 +10,19 @@ from typing import Any
 
 from migration_auditor.models import Severity
 
-KNOWN_RULE_IDS = frozenset({"MONGO-INDEX-001", "MONGO-DATA-002", "MONGO-ANALYSIS-001"})
+KNOWN_RULE_IDS = frozenset(
+    {
+        "MONGO-ANALYSIS-001",
+        "MONGO-DATA-001",
+        "MONGO-DATA-002",
+        "MONGO-EXEC-001",
+        "MONGO-INDEX-001",
+        "MONGO-INDEX-002",
+        "MONGO-SCHEMA-001",
+        "MONGO-SCHEMA-002",
+        "MONGO-SCHEMA-003",
+    }
+)
 
 
 class ConfigurationError(ValueError):

@@ -12,7 +12,17 @@ from migration_auditor.config import AuditorConfig, RuleConfig
 from migration_auditor.models import Confidence, Finding, Severity, SourceLocation
 
 MANIFEST_VERSION = 1
-SUPPORTED_OPERATIONS = {"create_index", "drop_collection"}
+SUPPORTED_OPERATIONS = {
+    "backfill",
+    "change_field_type",
+    "create_index",
+    "delete_many",
+    "drop_collection",
+    "increment",
+    "remove_field",
+    "rename_field",
+    "update_validator",
+}
 
 
 class AnalysisError(ValueError):
@@ -136,14 +146,50 @@ def _unsupported(operation: Operation, config: RuleConfig) -> Finding:
     )
 
 
+def _finding(
+    operation: Operation,
+    config: RuleConfig,
+    *,
+    rule_id: str,
+    title: str,
+    default_severity: Severity,
+    confidence: Confidence,
+    explanation: str,
+    evidence: tuple[str, ...],
+    remediation: str,
+    field: str | None = None,
+    index: str | None = None,
+) -> Finding:
+    """Create a consistently configured finding for a supported operation."""
+    return Finding.create(
+        rule_id=rule_id,
+        title=title,
+        severity=_severity(rule_id, default_severity, config),
+        confidence=confidence,
+        explanation=explanation,
+        evidence=evidence,
+        remediation=remediation,
+        documentation_url=f"docs/rules.md#{rule_id.lower()}",
+        suppressible=True,
+        location=operation.location,
+        collection=operation.collection,
+        field=field,
+        index=index,
+    )
+
+
+def _field_name(value: Any) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
 def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding, ...]:
-    """Apply the first deterministic rules to one normalized operation."""
+    """Apply deterministic rules to one normalized declarative operation."""
     if operation.name not in SUPPORTED_OPERATIONS:
         return (_unsupported(operation, config),)
 
     findings: list[Finding] = []
     if operation.name == "create_index":
-        if set(operation.payload) - {"op", "keys", "unique", "name"}:
+        if set(operation.payload) - {"op", "keys", "unique", "name", "build_context"}:
             return (_unsupported(operation, config),)
         unique = operation.payload.get("unique", False)
         keys = operation.payload.get("keys")
@@ -158,15 +204,22 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
         valid_name = "name" not in operation.payload or (
             isinstance(name, str) and bool(name.strip())
         )
-        if not isinstance(unique, bool) or not valid_keys or not valid_name:
+        build_context = operation.payload.get("build_context", "unknown")
+        if (
+            not isinstance(unique, bool)
+            or not valid_keys
+            or not valid_name
+            or build_context not in {"unknown", "high_write"}
+        ):
             return (_unsupported(operation, config),)
         if unique and _rule_enabled("MONGO-INDEX-001", config):
-            index_name = name
             findings.append(
-                Finding.create(
+                _finding(
+                    operation,
+                    config,
                     rule_id="MONGO-INDEX-001",
                     title="Unique index may fail on existing duplicates",
-                    severity=_severity("MONGO-INDEX-001", Severity.HIGH, config),
+                    default_severity=Severity.HIGH,
                     confidence=Confidence.MEDIUM,
                     explanation=(
                         "Static analysis cannot determine whether existing documents contain duplicate "
@@ -176,31 +229,124 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
                     remediation=(
                         "Run a bounded duplicate-key check on staging before creating the unique index."
                     ),
-                    documentation_url="docs/rules.md#mongo-index-001",
-                    suppressible=True,
-                    location=operation.location,
-                    collection=operation.collection,
-                    index=index_name,
+                    index=name,
                 )
             )
-    if operation.name == "drop_collection" and set(operation.payload) != {"op"}:
-        return (_unsupported(operation, config),)
-    if operation.name == "drop_collection" and _rule_enabled("MONGO-DATA-002", config):
-        findings.append(
-            Finding.create(
-                rule_id="MONGO-DATA-002",
-                title="Destructive collection drop",
-                severity=_severity("MONGO-DATA-002", Severity.HIGH, config),
-                confidence=Confidence.HIGH,
-                explanation="Dropping a collection is destructive and can permanently remove data.",
-                evidence=("recognized operation: drop_collection",),
-                remediation="Confirm a tested backup and recovery plan before deployment.",
-                documentation_url="docs/rules.md#mongo-data-002",
-                suppressible=True,
-                location=operation.location,
-                collection=operation.collection,
+        if build_context == "high_write" and _rule_enabled("MONGO-INDEX-002", config):
+            findings.append(
+                _finding(
+                    operation,
+                    config,
+                    rule_id="MONGO-INDEX-002",
+                    title="Index build declared for a high-write collection",
+                    default_severity=Severity.MEDIUM,
+                    confidence=Confidence.MEDIUM,
+                    explanation="An index build can add operational pressure while a collection is receiving high write traffic.",
+                    evidence=("create_index specifies build_context: high_write",),
+                    remediation="Validate the index-build plan and capacity on staging, then schedule an appropriate deployment window.",
+                    index=name,
+                )
             )
-        )
+    elif operation.name == "drop_collection":
+        if set(operation.payload) != {"op"}:
+            return (_unsupported(operation, config),)
+        if _rule_enabled("MONGO-DATA-002", config):
+            findings.append(
+                _finding(
+                    operation,
+                    config,
+                    rule_id="MONGO-DATA-002",
+                    title="Destructive collection operation",
+                    default_severity=Severity.HIGH,
+                    confidence=Confidence.HIGH,
+                    explanation="Dropping a collection is destructive and can permanently remove data.",
+                    evidence=("recognized operation: drop_collection",),
+                    remediation="Confirm a tested backup and recovery plan before deployment.",
+                )
+            )
+    elif operation.name == "delete_many":
+        if set(operation.payload) != {"op", "filter_scope", "recovery_plan"}:
+            return (_unsupported(operation, config),)
+        scope = operation.payload.get("filter_scope")
+        recovery_plan = operation.payload.get("recovery_plan")
+        if scope not in {"all", "filtered"} or not isinstance(recovery_plan, bool):
+            return (_unsupported(operation, config),)
+        if _rule_enabled("MONGO-DATA-002", config):
+            findings.append(
+                _finding(
+                    operation,
+                    config,
+                rule_id="MONGO-DATA-002",
+                    title="Destructive multi-document delete",
+                    default_severity=Severity.HIGH,
+                    confidence=Confidence.HIGH,
+                    explanation="Deleting many documents is destructive even when the declared scope is filtered.",
+                    evidence=(f"delete_many specifies filter_scope: {scope}",),
+                    remediation="Confirm a tested backup and recovery plan before deployment.",
+                )
+            )
+    elif operation.name == "update_validator":
+        if set(operation.payload) != {"op", "added_required"}:
+            return (_unsupported(operation, config),)
+        fields = operation.payload.get("added_required")
+        if not isinstance(fields, list) or not all(_field_name(field) for field in fields):
+            return (_unsupported(operation, config),)
+        if len(set(fields)) != len(fields):
+            return (_unsupported(operation, config),)
+        if fields and _rule_enabled("MONGO-SCHEMA-001", config):
+            for field in fields:
+                findings.append(
+                    _finding(
+                        operation, config, rule_id="MONGO-SCHEMA-001",
+                        title="Validator adds a required field", default_severity=Severity.HIGH,
+                        confidence=Confidence.HIGH,
+                        explanation="Existing documents may not contain a newly required field.",
+                        evidence=(f"update_validator adds required field: {field}",),
+                        remediation="Backfill and validate existing documents before enforcing the requirement.",
+                        field=field,
+                    )
+                )
+    elif operation.name == "remove_field":
+        if set(operation.payload) != {"op", "field", "compatibility_window"}:
+            return (_unsupported(operation, config),)
+        field, compatible = operation.payload.get("field"), operation.payload.get("compatibility_window")
+        if not _field_name(field) or not isinstance(compatible, bool):
+            return (_unsupported(operation, config),)
+        if not compatible and _rule_enabled("MONGO-SCHEMA-002", config):
+            findings.append(_finding(operation, config, rule_id="MONGO-SCHEMA-002", title="Field removal lacks a compatibility window", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="Older application versions may still read or write the removed field.", evidence=(f"remove_field specifies field: {field}",), remediation="Deploy a compatibility window and remove the field only after dependent versions are retired.", field=field))
+    elif operation.name == "rename_field":
+        if set(operation.payload) != {"op", "from", "to", "compatibility_window"}:
+            return (_unsupported(operation, config),)
+        source, target, compatible = operation.payload.get("from"), operation.payload.get("to"), operation.payload.get("compatibility_window")
+        if not _field_name(source) or not _field_name(target) or source == target or not isinstance(compatible, bool):
+            return (_unsupported(operation, config),)
+        if not compatible and _rule_enabled("MONGO-SCHEMA-002", config):
+            findings.append(_finding(operation, config, rule_id="MONGO-SCHEMA-002", title="Field rename lacks a compatibility window", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="Older application versions may still use the original field name.", evidence=(f"rename_field specifies {source} -> {target}",), remediation="Dual-read or dual-write during a compatibility window before retiring the original field.", field=source))
+    elif operation.name == "change_field_type":
+        if set(operation.payload) != {"op", "field", "from_type", "to_type", "conversion_plan"}:
+            return (_unsupported(operation, config),)
+        field, old, new, planned = (operation.payload.get(key) for key in ("field", "from_type", "to_type", "conversion_plan"))
+        if not _field_name(field) or not _field_name(old) or not _field_name(new) or old == new or not isinstance(planned, bool):
+            return (_unsupported(operation, config),)
+        if not planned and _rule_enabled("MONGO-SCHEMA-003", config):
+            findings.append(_finding(operation, config, rule_id="MONGO-SCHEMA-003", title="Field type change lacks a conversion plan", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="Existing values may not be compatible with the target BSON type.", evidence=(f"change_field_type specifies {field}: {old} -> {new}",), remediation="Define, test, and run a bounded conversion before enforcing the target type.", field=field))
+    elif operation.name == "backfill":
+        if set(operation.payload) != {"op", "field", "batched", "checkpointed", "throttled"}:
+            return (_unsupported(operation, config),)
+        field = operation.payload.get("field")
+        safeguards = tuple(operation.payload.get(key) for key in ("batched", "checkpointed", "throttled"))
+        if not _field_name(field) or not all(isinstance(value, bool) for value in safeguards):
+            return (_unsupported(operation, config),)
+        if not any(safeguards) and _rule_enabled("MONGO-DATA-001", config):
+            findings.append(_finding(operation, config, rule_id="MONGO-DATA-001", title="Backfill has no declared execution bounds", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="An unbounded backfill can overload the target collection and be difficult to resume safely.", evidence=(f"backfill for field: {field} has no batching, checkpointing, or throttling",), remediation="Use bounded batches and declare checkpointing or throttling before deployment.", field=field))
+    elif operation.name == "increment":
+        if set(operation.payload) != {"op", "field", "idempotent"}:
+            return (_unsupported(operation, config),)
+        field, idempotent = operation.payload.get("field"), operation.payload.get("idempotent")
+        if not _field_name(field) or not isinstance(idempotent, bool):
+            return (_unsupported(operation, config),)
+        if not idempotent and _rule_enabled("MONGO-EXEC-001", config):
+            findings.append(_finding(operation, config, rule_id="MONGO-EXEC-001", title="Increment is not retry-idempotent", default_severity=Severity.MEDIUM, confidence=Confidence.HIGH, explanation="Retrying an increment can apply the mutation more than once.", evidence=(f"increment specifies idempotent: false for {field}",), remediation="Use an idempotency key or a retry-safe update strategy.", field=field))
     return tuple(findings)
 
 
@@ -237,9 +383,15 @@ RULES = (
     },
     {
         "rule_id": "MONGO-DATA-002",
-        "title": "Destructive collection drop",
+        "title": "Destructive collection or multi-document delete",
         "default_severity": Severity.HIGH.value,
     },
+    {"rule_id": "MONGO-INDEX-002", "title": "Index build declared for a high-write collection", "default_severity": Severity.MEDIUM.value},
+    {"rule_id": "MONGO-SCHEMA-001", "title": "Validator adds a required field", "default_severity": Severity.HIGH.value},
+    {"rule_id": "MONGO-SCHEMA-002", "title": "Field removal or rename lacks a compatibility window", "default_severity": Severity.HIGH.value},
+    {"rule_id": "MONGO-SCHEMA-003", "title": "Field type change lacks a conversion plan", "default_severity": Severity.HIGH.value},
+    {"rule_id": "MONGO-DATA-001", "title": "Backfill has no declared execution bounds", "default_severity": Severity.HIGH.value},
+    {"rule_id": "MONGO-EXEC-001", "title": "Increment is not retry-idempotent", "default_severity": Severity.MEDIUM.value},
     {
         "rule_id": "MONGO-ANALYSIS-001",
         "title": "Unsupported migration operation",

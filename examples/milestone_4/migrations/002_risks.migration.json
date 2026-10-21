@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {"op": "create_index", "keys": {"last_login": -1}, "build_context": "high_write"},
+    {"op": "update_validator", "added_required": ["email"]},
+    {"op": "rename_field", "from": "phone", "to": "phone_number", "compatibility_window": false},
+    {"op": "change_field_type", "field": "age", "from_type": "string", "to_type": "int", "conversion_plan": false},
+    {"op": "delete_many", "filter_scope": "filtered", "recovery_plan": true},
+    {"op": "backfill", "field": "status", "batched": false, "checkpointed": false, "throttled": false},
+    {"op": "increment", "field": "retry_count", "idempotent": false}
+  ]
+}

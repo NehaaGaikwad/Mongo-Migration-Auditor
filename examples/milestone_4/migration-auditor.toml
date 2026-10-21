@@ -1,0 +1,5 @@
+[inputs]
+migration_paths = ["migrations"]
+
+[policy]
+fail_on = "high"

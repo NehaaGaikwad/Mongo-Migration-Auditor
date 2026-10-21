@@ -27,6 +27,14 @@ Create a `Milestone 2: Configuration, finding model and MongoDB audit store` mil
 | Deliver offline `check`, `rules`, and `version` commands | Complete locally | CLI tests cover text/JSON output and exit codes 0, 1, and 2. |
 | Implement first deterministic rules | Complete locally | Unique-index, destructive-drop, and unsupported-operation fixtures are covered. |
 
+## Milestone 4 — Initial deterministic rule catalogue
+
+| Issue | Status | Evidence / close condition |
+| --- | --- | --- |
+| Extend the safe Manifest v1 subset | Complete locally | Validator, field, backfill, retry, delete, and index-context operations have strict schemas. |
+| Add compatibility and operational risk rules | Complete locally | Positive and negative unit coverage plus `examples/milestone_4` fixtures. |
+| Document limitations and configuration support | Complete locally | README and rule catalogue list syntax, remediation, false-positive boundaries, and stable rule IDs. |
+
 ## Labels
 
 - `type: task`

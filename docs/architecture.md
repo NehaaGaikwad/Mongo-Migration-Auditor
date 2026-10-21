@@ -2,7 +2,7 @@
 
 ## Current state
 
-Milestones 1–3 are implemented: the package foundation, strict TOML configuration, stable serialized finding/run models, optional MongoDB audit metadata persistence, plus an offline manifest parser, deterministic rules, and CLI reports. Baseline comparison and preflight remain planned.
+Milestones 1–4 are implemented: the package foundation, strict TOML configuration, stable serialized finding/run models, optional MongoDB audit metadata persistence, plus an offline manifest parser, deterministic Manifest v1 risk rules, and CLI reports. Baseline comparison and preflight remain planned.
 
 ## Intended components
 
@@ -11,7 +11,7 @@ Milestones 1–3 are implemented: the package foundation, strict TOML configurat
 | Configuration | Parses strict TOML input paths, policy, rules, and optional audit-store settings. | Rejects unknown/ambiguous fields; URI is excluded from object representations. |
 | Parser | Converts Manifest v1 (`*.migration.json`) into normalized operations. | Implemented; does not execute migration code. Unsupported/dynamic input becomes an explicit result. |
 | Comparison | Compares normalized operations to a declared schema/index baseline. | Does not invent missing state. |
-| Rule engine | Applies deterministic, versioned rules and emits evidence/remediation. | Implemented initially for unique indexes, collection drops, and unsupported operations. No model/AI output is a blocking authority. |
+| Rule engine | Applies deterministic, versioned rules and emits evidence/remediation. | Implemented for documented index, validator, field compatibility/type, destructive, backfill-bound, retry-idempotency, and unsupported operations. No model/AI output is a blocking authority. |
 | Reporter and policy gate | Produces terminal/JSON reports and applies configured exit policy. | Implemented; exit 1 is a policy finding and exit 2 is an analyzer/config error. Severity and confidence remain separate. |
 | Optional preflight | Runs bounded, read-only checks on a staging target. | Disabled by default; separate least-privilege credentials. |
 | Audit store | Persists sanitized run metadata and findings. | Implemented as opt-in MongoDB/Offline stores; separate from target application database and excludes secrets/raw documents by default. |

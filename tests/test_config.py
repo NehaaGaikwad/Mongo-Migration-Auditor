@@ -82,6 +82,21 @@ def test_config_rejects_unknown_or_duplicate_rule_ids(rules: dict[str, object]) 
         AuditorConfig.from_mapping({"inputs": {"migration_paths": ["migrations"]}, "rules": rules})
 
 
+def test_config_accepts_milestone_four_rule_ids() -> None:
+    config = AuditorConfig.from_mapping(
+        {
+            "inputs": {"migration_paths": ["migrations"]},
+            "rules": {
+                "enabled": ["MONGO-SCHEMA-001", "MONGO-DATA-001"],
+                "severity_overrides": {"MONGO-EXEC-001": "high"},
+            },
+        }
+    )
+
+    assert config.rules.enabled == ("MONGO-SCHEMA-001", "MONGO-DATA-001")
+    assert config.rules.severity_overrides == {"MONGO-EXEC-001": Severity.HIGH}
+
+
 @pytest.mark.parametrize("key", ["database", "runs_collection", "findings_collection"])
 def test_config_rejects_non_string_audit_store_names(key: str) -> None:
     with pytest.raises(ConfigurationError, match="must be a string"):
