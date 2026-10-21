@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security concern
+    url: https://github.com/REPLACE_WITH_ORGANIZATION/database-schema-migration-auditor/security/advisories/new
+    about: Do not report secrets or vulnerabilities in public issues.
