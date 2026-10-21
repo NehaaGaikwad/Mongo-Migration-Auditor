@@ -19,6 +19,14 @@ Create a `Milestone 2: Configuration, finding model and MongoDB audit store` mil
 3. Implement optional, sanitized MongoDB audit persistence with offline mode.
 4. Add disposable MongoDB integration tests, including connection-error and duplicate-run cases.
 
+## Milestone 3 — First CLI vertical slice
+
+| Issue | Status | Evidence / close condition |
+| --- | --- | --- |
+| Define one safe, declarative migration format | Complete locally | Manifest v1 is documented and parser tests cover valid/malformed input. |
+| Deliver offline `check`, `rules`, and `version` commands | Complete locally | CLI tests cover text/JSON output and exit codes 0, 1, and 2. |
+| Implement first deterministic rules | Complete locally | Unique-index, destructive-drop, and unsupported-operation fixtures are covered. |
+
 ## Labels
 
 - `type: task`

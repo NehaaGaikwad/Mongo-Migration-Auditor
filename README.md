@@ -2,7 +2,7 @@
 
 A safety-focused CI/CD check for MongoDB migrations. The planned tool will inspect a deliberately small, documented subset of migration and schema/index inputs before deployment, identify known risks, and make uncertainty explicit.
 
-> **Project status:** Milestone 2 — typed configuration, finding/run contracts, and optional MongoDB audit persistence are implemented. The migration parser, rules, reporting CLI, and target-database preflight have not been implemented yet.
+> **Project status:** Milestone 3 — an offline CLI, one safe declarative migration format, deterministic first rules, text/JSON reports, and CI-compatible exit codes are implemented. Baseline comparison, MongoDB preflight, and broader migration-framework support remain planned.
 
 ## Why this exists
 
@@ -75,6 +75,60 @@ Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_URI
 
 The test creates a randomly named database and drops only that generated database during cleanup. Regular `python -m pytest` skips this integration test when the environment variable is absent.
 
+## CLI and supported migration manifests (Milestone 3)
+
+The first vertical slice intentionally supports only UTF-8 JSON files ending in `.migration.json`. The auditor reads data only: it never imports, runs, or evaluates JavaScript, Python, shell commands, or database migrations.
+
+```powershell
+migration-auditor version
+migration-auditor rules
+migration-auditor check --config migration-auditor.toml
+migration-auditor check --config migration-auditor.toml --format json
+```
+
+`python -m migration_auditor` is an equivalent entry point. The `check` command discovers `*.migration.json` files recursively below `inputs.migration_paths` and is fully offline. An invalid config or malformed manifest returns exit code `2`; a recognized finding meeting `policy.fail_on` returns `1`; otherwise the command returns `0`.
+
+### Manifest v1
+
+Every manifest has exactly `version`, `collection`, and `operations` keys:
+
+```json
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {
+      "op": "create_index",
+      "keys": {"email": 1},
+      "unique": true,
+      "name": "email_unique"
+    }
+  ]
+}
+```
+
+Supported operations are deliberately limited:
+
+| Operation | Accepted fields | Current behavior |
+| --- | --- | --- |
+| `create_index` | `op`, non-empty `keys` (each direction `1` or `-1`), optional boolean `unique`, optional `name` | `unique: true` emits `MONGO-INDEX-001`. |
+| `drop_collection` | `op` only | Emits `MONGO-DATA-002`. |
+
+Any unknown operation, dynamic operation, non-object operation, or unsupported field emits `MONGO-ANALYSIS-001`; it is never silently treated as safe. See [docs/rules.md](docs/rules.md) for rule rationale and remediation.
+
+### Demo fixtures
+
+[examples/milestone_3](examples/milestone_3) contains a safe index, a blocking unique-index risk, and an unsupported dynamic operation. [warning.toml](examples/milestone_3/configs/warning.toml) checks the same unique-index fixture with a Critical-only policy, demonstrating a visible but non-blocking warning:
+
+```powershell
+Set-Location examples/milestone_3
+migration-auditor check --config migration-auditor.toml
+# Produces MONGO-INDEX-001 and MONGO-ANALYSIS-001; exits 1 at the default high threshold.
+migration-auditor check --config configs/warning.toml
+# Produces MONGO-INDEX-001 but exits 0 because the configured threshold is Critical.
+Set-Location ../..
+```
+
 ## Local MongoDB (optional)
 
 MongoDB is not required to install or test this milestone. It will later have two separate roles:
@@ -96,9 +150,9 @@ The compose service exposes MongoDB only on `127.0.0.1:27017`. Stop it with `doc
 
 ## Scope decisions
 
-### Planned supported inputs
+### Supported inputs today
 
-The first usable analyzer will support one narrow, documented migration format plus declarative MongoDB schema/index manifests. The exact framework/format will be selected and documented before Milestone 3. Support will expand through explicit adapters, not by evaluating arbitrary code.
+Manifest v1 (`*.migration.json`) is the sole supported migration input. Future formats will be added through explicit adapters, not arbitrary-code evaluation.
 
 ### Planned checks
 
@@ -149,8 +203,9 @@ See [docs/architecture.md](docs/architecture.md) for component responsibilities 
 ## Repository layout
 
 ```text
-src/migration_auditor/  Importable package (future parser, rules, reports, and CLI)
+src/migration_auditor/  Importable package, parser, rules, reports, and CLI
 tests/                  Automated tests
+examples/milestone_3/   Reproducible CLI demonstration fixtures
 docs/                   Architecture and decision records
 .github/workflows/      Pull request and push CI
 docker-compose.yml      Optional local MongoDB service
@@ -172,7 +227,7 @@ python -m pytest
 
 - **Milestone 1:** Repository, scope, reproducible setup — complete locally; publication evidence pending.
 - **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store — complete locally; disposable-MongoDB evidence is opt-in.
-- **Milestone 3:** First CLI vertical slice using one documented input format.
+- **Milestone 3:** First CLI vertical slice using one documented input format — complete locally.
 - **Milestones 4–10:** Rule catalogue, baseline analysis, read-only preflight, reporting/policy, CI integration, evaluation, and handover.
 
 See the project master plan for the full acceptance criteria. Claims in this README reflect implemented work only.

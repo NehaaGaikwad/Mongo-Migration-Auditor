@@ -1,0 +1,7 @@
+# The same high-severity unique-index risk remains visible but is non-blocking
+# when this demonstration policy only fails critical findings.
+[inputs]
+migration_paths = ["../migrations/002_blocking.migration.json"]
+
+[policy]
+fail_on = "critical"

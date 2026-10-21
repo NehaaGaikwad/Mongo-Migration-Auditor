@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {
+      "op": "run_javascript",
+      "source": "db.users.updateMany({}, dynamicTransform())"
+    }
+  ]
+}

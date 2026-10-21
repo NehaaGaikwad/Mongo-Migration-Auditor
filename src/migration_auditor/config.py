@@ -145,12 +145,12 @@ class AuditorConfig:
         if "migration_paths" not in inputs_raw:
             raise ConfigurationError("inputs.migration_paths is required")
         migration_paths = tuple(
-            base_path / value
+            (base_path / value).resolve()
             for value in _string_list(inputs_raw["migration_paths"], "inputs.migration_paths")
         )
         baseline_value = _optional_string(inputs_raw.get("baseline_path"), "inputs.baseline_path")
         inputs = InputConfig(
-            migration_paths, base_path / baseline_value if baseline_value else None
+            migration_paths, (base_path / baseline_value).resolve() if baseline_value else None
         )
 
         rules_raw = _require_mapping(raw.get("rules", {}), "rules")

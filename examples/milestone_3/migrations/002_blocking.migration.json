@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {
+      "op": "create_index",
+      "keys": {"email": 1},
+      "unique": true,
+      "name": "email_unique"
+    }
+  ]
+}

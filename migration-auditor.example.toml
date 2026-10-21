@@ -1,5 +1,5 @@
-# Copy this file to migration-auditor.toml and adapt paths for a future check.
-# This configuration is validated in Milestone 2; no migration parser/CLI exists yet.
+# Copy this file to migration-auditor.toml and adapt paths for a `migration-auditor check` run.
+# Milestone 3 supports only `*.migration.json` declarative manifests; see README.md.
 
 [inputs]
 migration_paths = ["migrations"]
