@@ -31,8 +31,8 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/REPLACE_WITH_ORGANIZATION/database-schema-migration-auditor"
-Repository = "https://github.com/REPLACE_WITH_ORGANIZATION/database-schema-migration-auditor"
+Homepage = "https://github.com/NehaaGaikwad/Mongo-Migration-Auditor"
+Repository = "https://github.com/NehaaGaikwad/Mongo-Migration-Auditor"
 
 [project.scripts]
 migration-auditor = "migration_auditor.cli:main"
@@ -42,7 +42,7 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = ["-q", "-p", "no:cacheprovider", "--basetemp=.pytest-work"]
+addopts = ["-q", "-p", "no:cacheprovider"]
 pythonpath = ["src"]
 markers = [
   "integration: requires a disposable MongoDB instance configured by MIGRATION_AUDITOR_TEST_MONGODB_URI",

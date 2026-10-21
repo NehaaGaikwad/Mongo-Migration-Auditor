@@ -75,6 +75,8 @@ def parse_manifest(path: Path) -> tuple[Operation, ...]:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise AnalysisError(f"{_source_path(path)}: could not read manifest") from exc
+    except UnicodeDecodeError as exc:
+        raise AnalysisError(f"{_source_path(path)}: manifest is not valid UTF-8") from exc
     except json.JSONDecodeError as exc:
         raise AnalysisError(f"{_source_path(path)}: invalid JSON manifest") from exc
     if not isinstance(raw, Mapping):
@@ -83,7 +85,7 @@ def parse_manifest(path: Path) -> tuple[Operation, ...]:
         raise AnalysisError(
             f"{_source_path(path)}: manifest requires exactly version, collection, and operations"
         )
-    if raw["version"] != MANIFEST_VERSION:
+    if type(raw["version"]) is not int or raw["version"] != MANIFEST_VERSION:
         raise AnalysisError(f"{_source_path(path)}: unsupported manifest version")
     collection = raw["collection"]
     operations = raw["operations"]
@@ -146,13 +148,20 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
         unique = operation.payload.get("unique", False)
         keys = operation.payload.get("keys")
         valid_keys = isinstance(keys, Mapping) and bool(keys) and all(
-            isinstance(key, str) and value in (1, -1) for key, value in keys.items()
+            isinstance(key, str)
+            and bool(key.strip())
+            and type(value) is int
+            and value in (1, -1)
+            for key, value in keys.items()
         )
-        if not isinstance(unique, bool) or not valid_keys:
+        name = operation.payload.get("name")
+        valid_name = "name" not in operation.payload or (
+            isinstance(name, str) and bool(name.strip())
+        )
+        if not isinstance(unique, bool) or not valid_keys or not valid_name:
             return (_unsupported(operation, config),)
         if unique and _rule_enabled("MONGO-INDEX-001", config):
-            name = operation.payload.get("name")
-            index_name = name if isinstance(name, str) and name else None
+            index_name = name
             findings.append(
                 Finding.create(
                     rule_id="MONGO-INDEX-001",
@@ -200,6 +209,15 @@ def analyze(config: AuditorConfig) -> AnalysisReport:
     files = discover_manifests(config.inputs.migration_paths)
     findings: list[Finding] = []
     errors: list[str] = []
+    for path in config.inputs.migration_paths:
+        if not path.exists():
+            errors.append(f"configured migration input not found: {_source_path(path)}")
+        elif path.is_file() and not path.name.endswith(".migration.json"):
+            errors.append(
+                f"configured migration input is not a .migration.json file: {_source_path(path)}"
+            )
+    if not files and not errors:
+        errors.append("no .migration.json manifests found in configured migration paths")
     for path in files:
         try:
             operations = parse_manifest(path)

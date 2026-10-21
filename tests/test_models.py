@@ -59,6 +59,42 @@ def test_finding_id_is_deterministic_and_serializable() -> None:
     }
 
 
+def test_finding_id_changes_when_its_stable_identity_changes() -> None:
+    original = make_finding()
+    changed = Finding.create(
+        rule_id=original.rule_id,
+        title="A distinct rule message",
+        severity=original.severity,
+        confidence=original.confidence,
+        explanation=original.explanation,
+        evidence=original.evidence,
+        remediation=original.remediation,
+        documentation_url=original.documentation_url,
+        suppressible=original.suppressible,
+        location=original.location,
+        collection=original.collection,
+        index=original.index,
+    )
+
+    assert changed.finding_id != original.finding_id
+
+
+def test_models_reject_invalid_enum_values() -> None:
+    with pytest.raises(TypeError, match="severity"):
+        Finding(
+            finding_id="finding",
+            rule_id="MONGO-INDEX-001",
+            title="title",
+            severity="high",  # type: ignore[arg-type]
+            confidence=Confidence.HIGH,
+            explanation="explanation",
+            evidence=("evidence",),
+            remediation="remediation",
+            documentation_url=None,
+            suppressible=True,
+        )
+
+
 def test_stored_run_requires_consistent_finding_count() -> None:
     with pytest.raises(ValueError, match="must equal"):
         StoredRun(run=make_run(findings_count=0), findings=(make_finding(),))

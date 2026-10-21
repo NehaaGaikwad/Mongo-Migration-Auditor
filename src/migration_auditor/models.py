@@ -81,11 +81,17 @@ class Finding:
     index: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.severity, Severity):
+            raise TypeError("severity must be a Severity")
+        if not isinstance(self.confidence, Confidence):
+            raise TypeError("confidence must be a Confidence")
         for name in ("finding_id", "rule_id", "title", "explanation", "remediation"):
             if not getattr(self, name).strip():
                 raise ValueError(f"{name} must not be empty")
         if not self.evidence:
             raise ValueError("evidence must contain at least one sanitized statement")
+        if not all(isinstance(item, str) and item.strip() for item in self.evidence):
+            raise ValueError("evidence must contain non-empty strings")
 
     @classmethod
     def create(
@@ -106,9 +112,13 @@ class Finding:
         index: str | None = None,
     ) -> Finding:
         stable_parts = (
+            "finding-id-v1",
             rule_id,
+            title,
             location.file if location else "",
             str(location.line if location else ""),
+            str(location.column if location else ""),
+            location.operation if location and location.operation else "",
             collection or "",
             field or "",
             index or "",
@@ -164,6 +174,8 @@ class AuditRun:
     unknown_operations_count: int = 0
 
     def __post_init__(self) -> None:
+        if not isinstance(self.status, RunStatus):
+            raise TypeError("status must be a RunStatus")
         _utc(self.started_at, "started_at")
         _utc(self.completed_at, "completed_at")
         if self.completed_at < self.started_at:

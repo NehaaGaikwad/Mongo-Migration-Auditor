@@ -44,7 +44,10 @@ fail_on = "high"
         (
             {
                 "inputs": {"migration_paths": ["migrations"]},
-                "rules": {"enabled": ["X"], "disabled": ["X"]},
+                "rules": {
+                    "enabled": ["MONGO-INDEX-001"],
+                    "disabled": ["MONGO-INDEX-001"],
+                },
             },
             "cannot contain the same rule",
         ),
@@ -63,3 +66,25 @@ def test_config_rejects_unsafe_mongodb_uri_scheme() -> None:
 
     with pytest.raises(ConfigurationError, match="must start with mongodb"):
         AuditorConfig.from_mapping(raw)
+
+
+@pytest.mark.parametrize(
+    "rules",
+    [
+        {"enabled": ["MONGO-NOT-REAL-001"]},
+        {"disabled": ["MONGO-NOT-REAL-001"]},
+        {"severity_overrides": {"MONGO-NOT-REAL-001": "high"}},
+        {"enabled": ["MONGO-INDEX-001", "MONGO-INDEX-001"]},
+    ],
+)
+def test_config_rejects_unknown_or_duplicate_rule_ids(rules: dict[str, object]) -> None:
+    with pytest.raises(ConfigurationError, match="unknown rule ID|duplicate rule IDs"):
+        AuditorConfig.from_mapping({"inputs": {"migration_paths": ["migrations"]}, "rules": rules})
+
+
+@pytest.mark.parametrize("key", ["database", "runs_collection", "findings_collection"])
+def test_config_rejects_non_string_audit_store_names(key: str) -> None:
+    with pytest.raises(ConfigurationError, match="must be a string"):
+        AuditorConfig.from_mapping(
+            {"inputs": {"migration_paths": ["migrations"]}, "audit_store": {key: 123}}
+        )

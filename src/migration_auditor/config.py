@@ -10,6 +10,8 @@ from typing import Any
 
 from migration_auditor.models import Severity
 
+KNOWN_RULE_IDS = frozenset({"MONGO-INDEX-001", "MONGO-DATA-002", "MONGO-ANALYSIS-001"})
+
 
 class ConfigurationError(ValueError):
     """Raised when configuration is missing, malformed, or unsafe to interpret."""
@@ -30,12 +32,29 @@ def _optional_string(value: Any, name: str) -> str | None:
     return value or None
 
 
+def _required_string(value: Any, name: str) -> str:
+    normalized = _optional_string(value, name)
+    if normalized is None:
+        raise ConfigurationError(f"{name} must be a non-empty string")
+    return normalized
+
+
 def _string_list(value: Any, name: str) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(
         isinstance(item, str) and item.strip() for item in value
     ):
         raise ConfigurationError(f"{name} must be a list of non-empty strings")
     return tuple(item.strip() for item in value)
+
+
+def _rule_ids(value: Any, name: str) -> tuple[str, ...]:
+    rule_ids = _string_list(value, name)
+    unknown = sorted(set(rule_ids) - KNOWN_RULE_IDS)
+    if unknown:
+        raise ConfigurationError(f"{name} contains unknown rule ID(s): {', '.join(unknown)}")
+    if len(set(rule_ids)) != len(rule_ids):
+        raise ConfigurationError(f"{name} must not contain duplicate rule IDs")
+    return rule_ids
 
 
 def _positive_int(value: Any, name: str) -> int:
@@ -72,6 +91,13 @@ class RuleConfig:
     severity_overrides: Mapping[str, Severity] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
+        unknown = (set(self.enabled) | set(self.disabled) | set(self.severity_overrides)) - KNOWN_RULE_IDS
+        if unknown:
+            raise ConfigurationError(f"rules contain unknown rule ID(s): {', '.join(sorted(unknown))}")
+        if len(set(self.enabled)) != len(self.enabled) or len(set(self.disabled)) != len(self.disabled):
+            raise ConfigurationError("rules.enabled and rules.disabled must not contain duplicate rule IDs")
+        if not all(isinstance(severity, Severity) for severity in self.severity_overrides.values()):
+            raise ConfigurationError("rules.severity_overrides values must be valid severities")
         overlap = set(self.enabled) & set(self.disabled)
         if overlap:
             raise ConfigurationError(
@@ -113,7 +139,7 @@ class AuditStoreConfig:
             ("audit_store.runs_collection", self.runs_collection),
             ("audit_store.findings_collection", self.findings_collection),
         ):
-            if not value or not value.strip():
+            if not isinstance(value, str) or not value.strip():
                 raise ConfigurationError(f"{name} must not be empty")
 
     @property
@@ -162,6 +188,8 @@ class AuditorConfig:
         for rule_id, severity in override_raw.items():
             if not isinstance(rule_id, str) or not rule_id.strip():
                 raise ConfigurationError("rules.severity_overrides keys must be non-empty strings")
+            if rule_id not in KNOWN_RULE_IDS:
+                raise ConfigurationError(f"rules.severity_overrides contains unknown rule ID: {rule_id}")
             try:
                 overrides[rule_id] = Severity(str(severity).lower())
             except ValueError as exc:
@@ -169,8 +197,8 @@ class AuditorConfig:
                     f"rules.severity_overrides.{rule_id} is not a valid severity"
                 ) from exc
         rules = RuleConfig(
-            enabled=_string_list(rules_raw.get("enabled", []), "rules.enabled"),
-            disabled=_string_list(rules_raw.get("disabled", []), "rules.disabled"),
+            enabled=_rule_ids(rules_raw.get("enabled", []), "rules.enabled"),
+            disabled=_rule_ids(rules_raw.get("disabled", []), "rules.disabled"),
             severity_overrides=overrides,
         )
 
@@ -197,9 +225,16 @@ class AuditorConfig:
         )
         audit_store = AuditStoreConfig(
             uri=_optional_string(store_raw.get("uri"), "audit_store.uri"),
-            database=str(store_raw.get("database", "migration_auditor_metadata")),
-            runs_collection=str(store_raw.get("runs_collection", "audit_runs")),
-            findings_collection=str(store_raw.get("findings_collection", "audit_findings")),
+            database=_required_string(
+                store_raw.get("database", "migration_auditor_metadata"), "audit_store.database"
+            ),
+            runs_collection=_required_string(
+                store_raw.get("runs_collection", "audit_runs"), "audit_store.runs_collection"
+            ),
+            findings_collection=_required_string(
+                store_raw.get("findings_collection", "audit_findings"),
+                "audit_store.findings_collection",
+            ),
             server_selection_timeout_ms=_positive_int(
                 store_raw.get("server_selection_timeout_ms", 5_000),
                 "audit_store.server_selection_timeout_ms",

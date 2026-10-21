@@ -19,9 +19,10 @@ The central safety principle is: unsupported or dynamic input must never be sile
 | GitHub Actions CI workflow | Complete |
 | Placeholder-only environment configuration and local MongoDB guide | Complete |
 | Scope, non-goals, and privacy/safety boundaries | Complete |
-| Public repository URL / remote CI run | Pending repository publication |
+| Public repository URL | Complete: https://github.com/NehaaGaikwad/Mongo-Migration-Auditor |
+| Remote CI run evidence | Pending first published CI run URL |
 
-The project uses the MIT License; see [LICENSE](LICENSE). A GitHub issue/milestone board cannot be created until this local repository is published; its prepared backlog and completion criteria are in [docs/project-board.md](docs/project-board.md).
+The project uses the MIT License; see [LICENSE](LICENSE). The prepared project backlog and completion criteria are in [docs/project-board.md](docs/project-board.md).
 
 ## Requirements
 
@@ -32,8 +33,8 @@ The project uses the MIT License; see [LICENSE](LICENSE). A GitHub issue/milesto
 ## Quick start
 
 ```powershell
-git clone <your-repository-url>
-Set-Location database-schema-migration-auditor
+git clone https://github.com/NehaaGaikwad/Mongo-Migration-Auditor.git
+Set-Location Mongo-Migration-Auditor
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -48,7 +49,7 @@ The runtime dependency is pinned in [pyproject.toml](pyproject.toml): PyMongo is
 
 ## Configuration and audit metadata (Milestone 2)
 
-Copy [migration-auditor.example.toml](migration-auditor.example.toml) to `migration-auditor.toml`. The typed configuration validates input paths, the optional baseline path, rule enable/disable lists, severity overrides, policy threshold, MongoDB metadata settings, timeouts, and retention before analysis starts.
+Copy [migration-auditor.example.toml](migration-auditor.example.toml) to `migration-auditor.toml`. The typed configuration validates input paths, the optional baseline path, rule enable/disable lists, severity overrides, policy threshold, MongoDB metadata settings, timeouts, and retention before analysis starts. Rule filters and severity overrides must name an implemented rule ID; unknown or duplicate IDs are configuration errors.
 
 ```powershell
 Copy-Item migration-auditor.example.toml migration-auditor.toml
@@ -58,7 +59,7 @@ The sample is intentionally offline: leaving `audit_store.uri` empty selects `Of
 
 Do not put a URI containing credentials in a committed TOML file. Supply it through an ignored local configuration mechanism or secret manager when a future CLI is added. Neither the configuration model nor connection errors expose the URI in normal error messages.
 
-The stable finding contract includes rule ID, deterministic finding ID, severity, confidence, source location, collection/field/index where known, explanation, sanitized evidence, remediation, documentation link, and suppressibility. `AuditRun` records version, timestamps, status, a configuration fingerprint, and aggregate counts—never the configuration itself or credentials.
+The stable finding contract includes rule ID, deterministic finding ID, severity, confidence, source location, collection/field/index where known, explanation, sanitized evidence, remediation, documentation link, and suppressibility. Finding IDs are a versioned hash of the rule ID, title, source location, collection/field/index context, and evidence. `AuditRun` records version, timestamps, status, a configuration fingerprint, and aggregate counts—never the configuration itself or credentials.
 
 A deliberately sanitized example is available in [docs/sample-audit-record.json](docs/sample-audit-record.json). It is a schema illustration only; it contains no application documents or usable connection details.
 
@@ -86,11 +87,11 @@ migration-auditor check --config migration-auditor.toml
 migration-auditor check --config migration-auditor.toml --format json
 ```
 
-`python -m migration_auditor` is an equivalent entry point. The `check` command discovers `*.migration.json` files recursively below `inputs.migration_paths` and is fully offline. An invalid config or malformed manifest returns exit code `2`; a recognized finding meeting `policy.fail_on` returns `1`; otherwise the command returns `0`.
+`python -m migration_auditor` is an equivalent entry point. The `check` command discovers `*.migration.json` files recursively below `inputs.migration_paths` and is fully offline. Every configured path must exist, explicit file paths must end in `.migration.json`, and at least one manifest must be discovered. An invalid config, empty/missing input, or malformed manifest returns exit code `2`; a recognized finding meeting `policy.fail_on` returns `1`; otherwise the command returns `0`.
 
 ### Manifest v1
 
-Every manifest has exactly `version`, `collection`, and `operations` keys:
+Every manifest has exactly `version`, `collection`, and `operations` keys. `version` must be the integer `1` (not a string, float, or boolean); `collection` must be a non-empty string; `operations` must be an array.
 
 ```json
 {
@@ -111,7 +112,7 @@ Supported operations are deliberately limited:
 
 | Operation | Accepted fields | Current behavior |
 | --- | --- | --- |
-| `create_index` | `op`, non-empty `keys` (each direction `1` or `-1`), optional boolean `unique`, optional `name` | `unique: true` emits `MONGO-INDEX-001`. |
+| `create_index` | `op`, non-empty `keys` with non-empty field names and integer directions `1` or `-1` (not booleans/floats), optional boolean `unique`, optional non-empty string `name` | `unique: true` emits `MONGO-INDEX-001`; malformed fields emit `MONGO-ANALYSIS-001`. |
 | `drop_collection` | `op` only | Emits `MONGO-DATA-002`. |
 
 Any unknown operation, dynamic operation, non-object operation, or unsupported field emits `MONGO-ANALYSIS-001`; it is never silently treated as safe. See [docs/rules.md](docs/rules.md) for rule rationale and remediation.

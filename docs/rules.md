@@ -12,4 +12,4 @@ Only the rules below are implemented in Milestone 3. All other catalogue entries
 
 ## MONGO-ANALYSIS-001
 
-**Default severity:** Info. An operation outside the documented manifest subset, or malformed operation data, could not be analyzed. This rule is always emitted even if rule filtering is configured, because unsupported input must not be silently treated as safe. Review the operation manually or rewrite it using supported syntax.
+**Default severity:** Info. An operation outside the documented manifest subset, or malformed operation data, could not be analyzed. This rule is always emitted even if rule filtering is configured, because unsupported input must not be silently treated as safe. Its severity can be overridden by configuration, but it cannot be disabled through ordinary rule filters. Review the operation manually or rewrite it using supported syntax.
