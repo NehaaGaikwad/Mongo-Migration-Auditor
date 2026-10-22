@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {"type": "createIndex", "keys": {"email": 1}, "options": {"unique": true}},
+    {"type": "createIndex", "keys": {"status": 1}},
+    {"type": "create_index", "keys": {"lastLoginAt": -1}, "write_rate": "high"},
+    {"type": "backfill", "field": "normalizedStatus"},
+    {"type": "backfill", "field": "searchKey"},
+    {"type": "backfill", "field": "emailNormalized"}
+  ]
+}

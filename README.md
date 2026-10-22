@@ -78,7 +78,8 @@ file, but it is still submitted to and analyzed by the live backend.
 
 `POST /api/audits` accepts multipart form field `files` and returns the existing
 report contract plus `policy_failed`. A successful analysis is `200`, including a
-`policy_failed` status when a high/critical finding is present. Malformed manifests
+`policy_failed` status when a finding meets the configured policy threshold (High by
+default). Malformed manifests
 return `422` with the partial real report and errors; bad file types or unsafe ZIPs
 return `400`; excessive input sizes/counts return `413`. The web API has no endpoint
 for arbitrary paths, TOML configuration, executable commands, database access, or
@@ -196,7 +197,7 @@ supported only when the documented fields can be validated unambiguously:
 
 | Practical declaration | Canonical operation | Result |
 | --- | --- | --- |
-| `createIndex` with `keys` and `options.unique`, `options.name`, and/or `options.buildContext` | `create_index` | Unique-index and high-write risks are detected. Compound numeric `1`/`-1` keys are supported. |
+| `createIndex` with `keys` and `options.unique`, `options.name`, and/or `options.buildContext`; or `create_index` with `write_rate: "high"` | `create_index` | Unique-index and high-write risks are detected. Compound numeric `1`/`-1` keys are supported. `write_rate` only accepts `"high"`, which maps to `high_write`. |
 | `dropIndex` with `name` | `drop_index` | `MONGO-INDEX-003` warns of query-performance impact. |
 | `createCollection`, `addField` with `field`/`required` | `create_collection`, `add_field` | Recognized; an immediately required field emits the validator rule. |
 | `deleteMany` with a JSON-object `filter` | `delete_many` | Empty filters mean `all`; every delete is reported as destructive. |

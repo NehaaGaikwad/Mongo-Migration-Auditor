@@ -3,10 +3,13 @@ from __future__ import annotations
 import io
 import json
 import zipfile
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from migration_auditor.api import MAX_FILE_BYTES, app
+from migration_auditor.api import MAX_FILE_BYTES, _policy_failed, app
+from migration_auditor.config import AuditorConfig, InputConfig, PolicyConfig
+from migration_auditor.models import Confidence, Finding, Severity
 
 client = TestClient(app)
 
@@ -17,6 +20,26 @@ def manifest(operations: list[dict[str, object]]) -> bytes:
 
 def test_health() -> None:
     assert client.get("/health").json()["status"] == "ok"
+
+
+def test_policy_failure_uses_configured_threshold() -> None:
+    finding = Finding.create(
+        rule_id="MONGO-INDEX-002",
+        title="High-write index",
+        severity=Severity.MEDIUM,
+        confidence=Confidence.HIGH,
+        explanation="Test finding.",
+        evidence=("test evidence",),
+        remediation="Test remediation.",
+        documentation_url=None,
+        suppressible=True,
+    )
+    critical_policy = AuditorConfig(
+        inputs=InputConfig(migration_paths=(Path("manifest.migration.json"),)),
+        policy=PolicyConfig(fail_on=Severity.CRITICAL),
+    )
+
+    assert _policy_failed(critical_policy, (finding,)) is False
 
 
 def test_audit_returns_real_analyzer_finding() -> None:

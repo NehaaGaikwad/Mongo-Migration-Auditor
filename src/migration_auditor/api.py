@@ -21,11 +21,19 @@ from fastapi.responses import JSONResponse
 from migration_auditor import __version__
 from migration_auditor.analysis import analyze
 from migration_auditor.config import AuditorConfig, InputConfig
+from migration_auditor.models import Severity
 
 MAX_FILES = 10
 MAX_FILE_BYTES = 1_000_000
 MAX_ARCHIVE_BYTES = 5_000_000
 MAX_UNPACKED_BYTES = 10_000_000
+_SEVERITY_ORDER = {
+    Severity.INFO: 0,
+    Severity.LOW: 1,
+    Severity.MEDIUM: 2,
+    Severity.HIGH: 3,
+    Severity.CRITICAL: 4,
+}
 
 
 def _origins() -> list[str]:
@@ -45,6 +53,14 @@ app.add_middleware(
 
 def _error(status_code: int, detail: str) -> None:
     raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _policy_failed(config: AuditorConfig, report_findings: Iterable[object]) -> bool:
+    """Apply the configured threshold rather than treating any finding as a failure."""
+    return any(
+        _SEVERITY_ORDER[Severity(finding.severity)] >= _SEVERITY_ORDER[config.policy.fail_on]
+        for finding in report_findings
+    )
 
 
 def _safe_member(name: str) -> PurePosixPath:
@@ -123,7 +139,8 @@ async def audit(files: list[UploadFile] = File(...)) -> dict[str, object]:
     """Analyze uploaded declarative manifests and return the package report."""
     with tempfile.TemporaryDirectory(prefix="mongo-migration-auditor-") as temporary:
         paths = await _save_uploads(files, Path(temporary))
-        report = analyze(AuditorConfig(inputs=InputConfig(migration_paths=tuple(paths))))
+        config = AuditorConfig(inputs=InputConfig(migration_paths=tuple(paths)))
+        report = analyze(config)
     response = report.to_dict()
     # Temporary server paths are not useful to a browser client and must not be
     # exposed. Uploaded names are sufficient to identify the affected manifest.
@@ -134,9 +151,7 @@ async def audit(files: list[UploadFile] = File(...)) -> dict[str, object]:
     response["errors"] = [
         error.replace(Path(temporary).as_posix(), "uploaded") for error in response["errors"]
     ]
-    response["policy_failed"] = any(
-        finding.severity.value in {"high", "critical"} for finding in report.findings
-    )
+    response["policy_failed"] = _policy_failed(config, report.findings)
     response["status"] = "invalid_input" if report.errors else (
         "policy_failed" if response["policy_failed"] else "completed"
     )

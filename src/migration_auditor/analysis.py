@@ -164,6 +164,15 @@ def _normalise_operation(raw: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]
             if target in payload:
                 return "__unsupported__", raw
             payload[target] = value
+    if canonical == "create_index" and "write_rate" in payload:
+        write_rate = payload.pop("write_rate")
+        # The canonical model only represents the high-write condition that
+        # MONGO-INDEX-002 can assess. Other labels are not silently downgraded.
+        if write_rate != "high" or (
+            "build_context" in payload and payload["build_context"] != "high_write"
+        ):
+            return "__unsupported__", raw
+        payload["build_context"] = "high_write"
 
     if canonical == "update_validator" and "validator" in payload:
         validator = payload.pop("validator")

@@ -8,7 +8,7 @@ The rules below are implemented in Milestone 4. They analyze only documented Man
 
 ## MONGO-INDEX-002
 
-**Default severity:** Medium. `create_index` with `build_context: "high_write"` declares that the target receives high write traffic. Validate capacity, server-version behavior, and a deployment window on staging. The analyzer cannot infer write traffic itself.
+**Default severity:** Medium. `create_index` with `build_context: "high_write"`, or the strictly equivalent `write_rate: "high"`, declares that the target receives high write traffic. Validate capacity, server-version behavior, and a deployment window on staging. The analyzer cannot infer write traffic itself; other `write_rate` labels are unsupported rather than silently treated as low risk.
 
 ## MONGO-SCHEMA-001
 
