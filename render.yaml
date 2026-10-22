@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: mongo-migration-auditor-api
+    runtime: python
+    buildCommand: pip install .
+    startCommand: uvicorn migration_auditor.api:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: ALLOWED_ORIGINS
+        sync: false

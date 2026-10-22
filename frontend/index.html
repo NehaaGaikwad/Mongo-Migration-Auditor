@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Static analysis for declarative MongoDB migration manifests." />
+    <title>Mongo Migration Auditor</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="container">
+      <header><p class="eyebrow">SECURITY-FOCUSED STATIC ANALYSIS</p><h1>Mongo Migration Auditor</h1><p>Upload declarative manifests to inspect real migration risks before deployment. Files are analyzed in memory-backed temporary storage and are not retained.</p></header>
+      <section class="card" aria-labelledby="upload-title">
+        <h2 id="upload-title">Analyze migrations</h2>
+        <p>Choose up to 10 <code>.migration.json</code> files or one ZIP containing only those manifests. Maximum 1 MB per manifest.</p>
+        <label class="dropzone" for="files"><span>Choose migration files or a ZIP</span><input id="files" type="file" accept=".migration.json,.zip,application/json,application/zip" multiple /></label>
+        <ul id="selected-files" aria-live="polite"></ul>
+        <div class="actions"><button id="analyze" type="button">Run audit</button><button id="sample" class="secondary" type="button">Load risk sample</button></div>
+        <p id="message" role="status"></p>
+      </section>
+      <section id="results" hidden aria-live="polite">
+        <div class="result-header"><h2>Audit results</h2><button id="download" class="secondary" type="button">Download JSON report</button></div>
+        <div id="summary" class="summary"></div>
+        <div class="filters"><label>Severity <select id="severity"><option value="">All</option><option>critical</option><option>high</option><option>medium</option><option>low</option><option>info</option></select></label><label>Rule ID <select id="rule"><option value="">All rules</option></select></label></div>
+        <div id="errors"></div><div id="findings"></div>
+      </section>
+    </main><script src="config.js"></script><script src="app.js"></script>
+  </body>
+</html>

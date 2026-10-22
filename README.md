@@ -28,6 +28,7 @@ The project uses the MIT License; see [LICENSE](LICENSE). The prepared project b
 
 - Python 3.11 or newer (CI tests 3.11 through 3.14)
 - Git
+- Node.js 20+ (only for the web frontend)
 - Docker Desktop only if you want a local MongoDB instance for later milestones
 
 ## Quick start
@@ -46,6 +47,68 @@ python -m pytest
 On macOS/Linux, activate the environment with `source .venv/bin/activate`.
 
 The runtime dependency is pinned in [pyproject.toml](pyproject.toml): PyMongo is used only when audit metadata persistence is explicitly enabled. Development dependencies are pinned there too for repeatability.
+
+## Web application
+
+The project also includes a connected web application: a static browser interface in
+[`frontend/`](frontend) and a FastAPI backend in
+[`src/migration_auditor/api.py`](src/migration_auditor/api.py). The browser uploads
+manifest files to the API; the API writes them into a request-scoped temporary
+directory, calls the existing `analyze()` package function, returns its real report,
+and removes the directory before responding. No uploaded code is executed.
+
+```powershell
+# Terminal 1: from the repository root
+python -m uvicorn migration_auditor.api:app --reload --port 8000
+
+# Terminal 2: serve the static frontend from its directory
+Set-Location frontend
+python -m http.server 5173
+```
+
+Open `http://localhost:5173`. The interface accepts up to ten `.migration.json`
+files, or a ZIP containing only those files; displays actual findings, errors,
+unsupported-operation results and policy status; filters by severity and rule ID;
+and downloads the returned JSON report. “Load risk sample” creates a local sample
+file, but it is still submitted to and analyzed by the live backend.
+
+### HTTP API
+
+`GET /health` returns `{ "status": "ok", "version": "..." }` for host health checks.
+
+`POST /api/audits` accepts multipart form field `files` and returns the existing
+report contract plus `policy_failed`. A successful analysis is `200`, including a
+`policy_failed` status when a high/critical finding is present. Malformed manifests
+return `422` with the partial real report and errors; bad file types or unsafe ZIPs
+return `400`; excessive input sizes/counts return `413`. The web API has no endpoint
+for arbitrary paths, TOML configuration, executable commands, database access, or
+saved uploads.
+
+The upload limits are 10 files, 1 MB per manifest, 5 MB per ZIP and 10 MB expanded
+archive content. ZIP members must be relative `.migration.json` files, have unique
+names, and cannot traverse directories. These bounds mitigate, but do not replace,
+hosting-level abuse controls such as rate limiting and request timeouts.
+
+### Deploying
+
+Deployment needs accounts with your hosting providers, so no live URLs are claimed
+yet. The repository is ready for a Render backend and Vercel frontend:
+
+1. Push these changes to GitHub. In Render, create a new **Blueprint** from the
+   repository; it uses [`render.yaml`](render.yaml). Set `ALLOWED_ORIGINS` to the
+   exact Vercel URL after the frontend is created (for example
+   `https://your-project.vercel.app`). Render supplies `PORT`; do not set it.
+2. In Vercel, import the same repository and set **Root Directory** to `frontend`.
+   Its build command is `npm run build` and output directory is `dist`. Add build
+   environment variable `AUDITOR_API_URL` with the public Render API URL, such as
+   `https://mongo-migration-auditor-api.onrender.com`, then deploy.
+3. Update Render's `ALLOWED_ORIGINS` with the Vercel production URL and redeploy the
+   backend. Verify `https://<render-service>/health`, then upload
+   `examples/milestone_4/migrations/002_risks.migration.json` in the deployed site.
+
+`AUDITOR_API_URL` is compiled into the public static frontend and is not a secret.
+Do not place credentials in it or in source control. If using a Vercel preview URL,
+add that exact origin to `ALLOWED_ORIGINS` too.
 
 ## Configuration and audit metadata (Milestone 2)
 

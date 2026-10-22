@@ -21,7 +21,10 @@ classifiers = [
   "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
+  "fastapi>=0.115,<1",
   "pymongo==4.10.1",
+  "python-multipart>=0.0.20,<1",
+  "uvicorn[standard]>=0.34,<1",
 ]
 
 [project.optional-dependencies]
