@@ -13,15 +13,49 @@ from migration_auditor.models import Confidence, Finding, Severity, SourceLocati
 
 MANIFEST_VERSION = 1
 SUPPORTED_OPERATIONS = {
+    "add_field",
     "backfill",
+    "bulk_update",
     "change_field_type",
+    "create_collection",
     "create_index",
     "delete_many",
+    "drop_index",
     "drop_collection",
     "increment",
     "remove_field",
     "rename_field",
     "update_validator",
+}
+
+# The JSON adapter accepts these spelling variants only.  It deliberately does
+# not attempt to infer semantics from arbitrary driver or application code.
+OPERATION_ALIASES = {
+    "addField": "add_field",
+    "add_field": "add_field",
+    "backfill": "backfill",
+    "bulkUpdate": "bulk_update",
+    "bulk_update": "bulk_update",
+    "changeFieldType": "change_field_type",
+    "change_field_type": "change_field_type",
+    "createCollection": "create_collection",
+    "create_collection": "create_collection",
+    "createIndex": "create_index",
+    "create_index": "create_index",
+    "deleteMany": "delete_many",
+    "delete_many": "delete_many",
+    "dropCollection": "drop_collection",
+    "drop_collection": "drop_collection",
+    "dropIndex": "drop_index",
+    "drop_index": "drop_index",
+    "increment": "increment",
+    "removeField": "remove_field",
+    "remove_field": "remove_field",
+    "renameField": "rename_field",
+    "rename_field": "rename_field",
+    "updateMany": "bulk_update",
+    "updateValidator": "update_validator",
+    "update_validator": "update_validator",
 }
 
 
@@ -79,6 +113,102 @@ def _source_path(path: Path) -> str:
         return path.as_posix()
 
 
+def _normalise_operation(raw: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
+    """Translate documented Mongo-style JSON aliases to the canonical model.
+
+    A failed translation intentionally remains an unsupported operation. This
+    keeps one rule engine and prevents unrecognised fields from looking safe.
+    """
+    name = raw.get("op")
+    if not isinstance(name, str) or name not in OPERATION_ALIASES:
+        return "__unsupported__", raw
+    canonical = OPERATION_ALIASES[name]
+    payload = dict(raw)
+    payload["op"] = canonical
+    aliases = {
+        "buildContext": "build_context",
+        "compatibilityWindow": "compatibility_window",
+        "conversionPlan": "conversion_plan",
+        "filterScope": "filter_scope",
+        "recoveryPlan": "recovery_plan",
+    }
+    for source, target in aliases.items():
+        if source in payload:
+            if target in payload:
+                return "__unsupported__", raw
+            payload[target] = payload.pop(source)
+
+    if canonical == "create_index" and "options" in payload:
+        options = payload.pop("options")
+        if not isinstance(options, Mapping):
+            return "__unsupported__", raw
+        allowed = {"unique", "name", "build_context", "buildContext"}
+        if set(options) - allowed:
+            return "__unsupported__", raw
+        for key, value in options.items():
+            target = aliases.get(key, key)
+            if target in payload:
+                return "__unsupported__", raw
+            payload[target] = value
+
+    if canonical == "update_validator" and "validator" in payload:
+        validator = payload.pop("validator")
+        if "added_required" in payload or not isinstance(validator, Mapping):
+            return "__unsupported__", raw
+        schema = validator.get("$jsonSchema")
+        if set(validator) != {"$jsonSchema"} or not isinstance(schema, Mapping):
+            return "__unsupported__", raw
+        required = schema.get("required", [])
+        if set(schema) - {"bsonType", "required", "properties"}:
+            return "__unsupported__", raw
+        payload["added_required"] = required
+
+    if canonical == "delete_many" and "filter" in payload:
+        filter_value = payload.pop("filter")
+        if not isinstance(filter_value, Mapping) or "filter_scope" in payload:
+            return "__unsupported__", raw
+        payload["filter_scope"] = "all" if not filter_value else "filtered"
+    if canonical == "delete_many":
+        payload.setdefault("recovery_plan", False)
+    if canonical in {"backfill", "bulk_update"} and "options" in payload:
+        options = payload.pop("options")
+        if not isinstance(options, Mapping) or set(options) - {"batchSize", "checkpoint", "throttleMs"}:
+            return "__unsupported__", raw
+        for key, value in options.items():
+            if key in payload:
+                return "__unsupported__", raw
+            payload[key] = value
+    if canonical in {"backfill", "bulk_update"}:
+        # Numeric batch/throttle declarations are normalized to the existing
+        # boolean safeguards; their values are not execution instructions.
+        for source, target in (("batchSize", "batched"), ("checkpoint", "checkpointed"), ("throttleMs", "throttled")):
+            if source in payload:
+                if target in payload:
+                    return "__unsupported__", raw
+                value = payload.pop(source)
+                if source in {"batchSize", "throttleMs"}:
+                    if type(value) is not int or value <= 0:
+                        return "__unsupported__", raw
+                    payload[target] = True
+                else:
+                    payload[target] = value
+        for safeguard in ("batched", "checkpointed", "throttled"):
+            payload.setdefault(safeguard, False)
+    if canonical == "bulk_update":
+        update = payload.pop("update", None)
+        filter_value = payload.pop("filter", None)
+        if (
+            not isinstance(filter_value, Mapping)
+            or not isinstance(update, Mapping)
+            or set(update) - {"$set", "$unset"}
+            or not update
+            or not all(isinstance(value, Mapping) and value for value in update.values())
+        ):
+            return "__unsupported__", raw
+        payload["filter_scope"] = "all" if not filter_value else "filtered"
+    return canonical, payload
+
+
 def parse_manifest(path: Path) -> tuple[Operation, ...]:
     """Parse one declarative JSON manifest without importing or executing any migration code."""
     try:
@@ -110,11 +240,10 @@ def parse_manifest(path: Path) -> tuple[Operation, ...]:
         if not isinstance(operation, Mapping):
             parsed.append(Operation("__unsupported__", collection, {}, location))
             continue
-        name = operation.get("op")
-        if not isinstance(name, str):
-            parsed.append(Operation("__unsupported__", collection, operation, location))
-            continue
-        parsed.append(Operation(name, collection, operation, location))
+        name, payload = _normalise_operation(operation)
+        if name == "__unsupported__" and isinstance(operation.get("op"), str):
+            name = f"unsupported declaration: {operation['op']}"
+        parsed.append(Operation(name, collection, payload, location))
     return tuple(parsed)
 
 
@@ -264,6 +393,23 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
                     remediation="Confirm a tested backup and recovery plan before deployment.",
                 )
             )
+    elif operation.name == "create_collection":
+        if set(operation.payload) != {"op"}:
+            return (_unsupported(operation, config),)
+    elif operation.name == "drop_index":
+        if set(operation.payload) != {"op", "name"} or not _field_name(operation.payload.get("name")):
+            return (_unsupported(operation, config),)
+        if _rule_enabled("MONGO-INDEX-003", config):
+            findings.append(
+                _finding(
+                    operation, config, rule_id="MONGO-INDEX-003", title="Index removal may affect query performance",
+                    default_severity=Severity.MEDIUM, confidence=Confidence.MEDIUM,
+                    explanation="Removing an index can change query plans and increase load for dependent queries.",
+                    evidence=(f"drop_index specifies name: {operation.payload['name']}",),
+                    remediation="Review query plans and rollout capacity before removing the index.",
+                    index=operation.payload["name"],
+                )
+            )
     elif operation.name == "delete_many":
         if set(operation.payload) != {"op", "filter_scope", "recovery_plan"}:
             return (_unsupported(operation, config),)
@@ -306,6 +452,11 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
                         field=field,
                     )
                 )
+    elif operation.name == "add_field":
+        if set(operation.payload) != {"op", "field", "required"} or not _field_name(operation.payload.get("field")) or not isinstance(operation.payload.get("required"), bool):
+            return (_unsupported(operation, config),)
+        if operation.payload["required"] and _rule_enabled("MONGO-SCHEMA-001", config):
+            findings.append(_finding(operation, config, rule_id="MONGO-SCHEMA-001", title="Added field is immediately required", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="Existing documents may not contain the newly required field.", evidence=(f"add_field specifies required field: {operation.payload['field']}",), remediation="Backfill and validate existing documents before enforcing the requirement.", field=operation.payload["field"]))
     elif operation.name == "remove_field":
         if set(operation.payload) != {"op", "field", "compatibility_window"}:
             return (_unsupported(operation, config),)
@@ -339,6 +490,14 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
             return (_unsupported(operation, config),)
         if not any(safeguards) and _rule_enabled("MONGO-DATA-001", config):
             findings.append(_finding(operation, config, rule_id="MONGO-DATA-001", title="Backfill has no declared execution bounds", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="An unbounded backfill can overload the target collection and be difficult to resume safely.", evidence=(f"backfill for field: {field} has no batching, checkpointing, or throttling",), remediation="Use bounded batches and declare checkpointing or throttling before deployment.", field=field))
+    elif operation.name == "bulk_update":
+        if set(operation.payload) != {"op", "filter_scope", "batched", "checkpointed", "throttled"} or operation.payload.get("filter_scope") not in {"all", "filtered"}:
+            return (_unsupported(operation, config),)
+        safeguards = tuple(operation.payload[key] for key in ("batched", "checkpointed", "throttled"))
+        if not all(isinstance(value, bool) for value in safeguards):
+            return (_unsupported(operation, config),)
+        if not any(safeguards) and _rule_enabled("MONGO-DATA-001", config):
+            findings.append(_finding(operation, config, rule_id="MONGO-DATA-001", title="Bulk update has no declared execution bounds", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="An unbounded multi-document update can overload the target collection and be difficult to resume safely.", evidence=(f"bulk_update specifies filter_scope: {operation.payload['filter_scope']} with no batching, checkpointing, or throttling",), remediation="Use bounded batches and declare checkpointing or throttling before deployment."))
     elif operation.name == "increment":
         if set(operation.payload) != {"op", "field", "idempotent"}:
             return (_unsupported(operation, config),)
@@ -387,6 +546,7 @@ RULES = (
         "default_severity": Severity.HIGH.value,
     },
     {"rule_id": "MONGO-INDEX-002", "title": "Index build declared for a high-write collection", "default_severity": Severity.MEDIUM.value},
+    {"rule_id": "MONGO-INDEX-003", "title": "Index removal may affect query performance", "default_severity": Severity.MEDIUM.value},
     {"rule_id": "MONGO-SCHEMA-001", "title": "Validator adds a required field", "default_severity": Severity.HIGH.value},
     {"rule_id": "MONGO-SCHEMA-002", "title": "Field removal or rename lacks a compatibility window", "default_severity": Severity.HIGH.value},
     {"rule_id": "MONGO-SCHEMA-003", "title": "Field type change lacks a conversion plan", "default_severity": Severity.HIGH.value},

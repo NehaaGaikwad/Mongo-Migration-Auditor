@@ -187,6 +187,32 @@ Supported operations are deliberately limited:
 
 Any unknown operation, dynamic operation, non-object operation, or unsupported field emits `MONGO-ANALYSIS-001`; it is never silently treated as safe. See [docs/rules.md](docs/rules.md) for rule rationale and remediation.
 
+### Practical MongoDB JSON aliases
+
+The declarative JSON adapter also accepts common MongoDB-style aliases and converts
+them into the same canonical internal operations used by the CLI rules. It does not
+execute code, connect to MongoDB, or evaluate expressions. Both spellings below are
+supported only when the documented fields can be validated unambiguously:
+
+| Practical declaration | Canonical operation | Result |
+| --- | --- | --- |
+| `createIndex` with `keys` and `options.unique`, `options.name`, and/or `options.buildContext` | `create_index` | Unique-index and high-write risks are detected. Compound numeric `1`/`-1` keys are supported. |
+| `dropIndex` with `name` | `drop_index` | `MONGO-INDEX-003` warns of query-performance impact. |
+| `createCollection`, `addField` with `field`/`required` | `create_collection`, `add_field` | Recognized; an immediately required field emits the validator rule. |
+| `deleteMany` with a JSON-object `filter` | `delete_many` | Empty filters mean `all`; every delete is reported as destructive. |
+| `updateMany`/`bulkUpdate` with JSON-object `filter` and non-empty `$set` and/or `$unset` objects | `bulk_update` | An absent batch/checkpoint/throttle declaration emits the execution-bounds rule. |
+| `backfill` with `batchSize`, `checkpoint`, or `throttleMs` (top-level or in its `options`) | `backfill` | Positive numeric bounds normalize to declared safeguards. |
+| `updateValidator` with `{ "validator": { "$jsonSchema": { "required": [...] } } }` | `update_validator` | Newly required fields emit the validator rule. |
+
+The original snake_case format remains fully compatible. For all aliases,
+`buildContext`, `compatibilityWindow`, `conversionPlan`, `filterScope`, and
+`recoveryPlan` are accepted as camelCase equivalents. Raw driver code, JavaScript or
+Python migration files, aggregation pipelines, arbitrary update operators, index
+options such as `partialFilterExpression`, and framework-specific source files are
+not implemented adapters: source files are rejected by upload/discovery and dynamic
+JSON operations produce an unsupported-operation finding. This intentional
+fail-closed behavior is not a claim that the migration is safe.
+
 ### Demo fixtures
 
 [examples/milestone_3](examples/milestone_3) contains the original CLI demonstration. [examples/milestone_4](examples/milestone_4) adds safe declarations and representative Milestone 4 risks. [warning.toml](examples/milestone_3/configs/warning.toml) checks the unique-index fixture with a Critical-only policy, demonstrating a visible but non-blocking warning:

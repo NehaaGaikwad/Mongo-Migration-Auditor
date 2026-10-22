@@ -125,6 +125,15 @@ async def audit(files: list[UploadFile] = File(...)) -> dict[str, object]:
         paths = await _save_uploads(files, Path(temporary))
         report = analyze(AuditorConfig(inputs=InputConfig(migration_paths=tuple(paths))))
     response = report.to_dict()
+    # Temporary server paths are not useful to a browser client and must not be
+    # exposed. Uploaded names are sufficient to identify the affected manifest.
+    for finding in response["findings"]:
+        location = finding.get("location")
+        if location:
+            location["file"] = Path(location["file"]).name
+    response["errors"] = [
+        error.replace(Path(temporary).as_posix(), "uploaded") for error in response["errors"]
+    ]
     response["policy_failed"] = any(
         finding.severity.value in {"high", "critical"} for finding in report.findings
     )

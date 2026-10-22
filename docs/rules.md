@@ -44,3 +44,7 @@ The rules below are implemented in Milestone 4. They analyze only documented Man
 - `build_context` is supplied by the manifest; the analyzer cannot derive workload, collection size, server version, lock behavior, or deployment topology.
 - No baseline comparison or database preflight exists yet. The analyzer cannot prove validator compatibility, duplicate values, backfill cardinality, or recovery readiness.
 - Arbitrary filters, raw update expressions, scripts, and migration-framework code remain unsupported and intentionally produce `MONGO-ANALYSIS-001` rather than a safety claim.
+
+## MONGO-INDEX-003
+
+**Default severity:** Medium. `drop_index` / `dropIndex` can alter query plans and affect query performance. Review dependent query plans and rollout capacity before removing the index.

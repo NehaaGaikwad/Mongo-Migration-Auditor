@@ -18,6 +18,7 @@ KNOWN_RULE_IDS = frozenset(
         "MONGO-EXEC-001",
         "MONGO-INDEX-001",
         "MONGO-INDEX-002",
+        "MONGO-INDEX-003",
         "MONGO-SCHEMA-001",
         "MONGO-SCHEMA-002",
         "MONGO-SCHEMA-003",

@@ -61,3 +61,11 @@ def test_zip_manifests_are_analyzed() -> None:
     response = client.post("/api/audits", files={"files": ("uploads.zip", content.getvalue(), "application/zip")})
     assert response.status_code == 200
     assert response.json()["findings"][0]["rule_id"] == "MONGO-EXEC-001"
+
+
+def test_common_mongo_aliases_reach_the_real_rule_engine() -> None:
+    payload = manifest([{"op": "createIndex", "keys": {"email": 1}, "options": {"unique": True}}, {"op": "backfill", "field": "normalized_email"}])
+    response = client.post("/api/audits", files={"files": ("migration.migration.json", payload, "application/json")})
+    assert response.status_code == 200
+    assert [item["rule_id"] for item in response.json()["findings"]] == ["MONGO-INDEX-001", "MONGO-DATA-001"]
+    assert response.json()["findings"][0]["location"]["file"] == "upload-1-migration.migration.json"
