@@ -119,12 +119,26 @@ def _normalise_operation(raw: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]
     A failed translation intentionally remains an unsupported operation. This
     keeps one rule engine and prevents unrecognised fields from looking safe.
     """
-    name = raw.get("op")
-    if not isinstance(name, str) or name not in OPERATION_ALIASES:
+    op_name = raw.get("op")
+    type_name = raw.get("type")
+    if op_name is not None and not isinstance(op_name, str):
         return "__unsupported__", raw
-    canonical = OPERATION_ALIASES[name]
+    if type_name is not None and not isinstance(type_name, str):
+        return "__unsupported__", raw
+    if op_name is None and type_name is None:
+        return "__unsupported__", raw
+    op_canonical = OPERATION_ALIASES.get(op_name) if isinstance(op_name, str) else None
+    type_canonical = OPERATION_ALIASES.get(type_name) if isinstance(type_name, str) else None
+    # Different spellings are allowed only when they describe the same known
+    # canonical operation. Conflicting operation declarations must fail closed.
+    if op_name is not None and type_name is not None and op_canonical != type_canonical:
+        return "__unsupported__", raw
+    canonical = type_canonical if type_name is not None else op_canonical
+    if canonical is None:
+        return "__unsupported__", raw
     payload = dict(raw)
     payload["op"] = canonical
+    payload.pop("type", None)
     aliases = {
         "buildContext": "build_context",
         "compatibilityWindow": "compatibility_window",
@@ -241,8 +255,9 @@ def parse_manifest(path: Path) -> tuple[Operation, ...]:
             parsed.append(Operation("__unsupported__", collection, {}, location))
             continue
         name, payload = _normalise_operation(operation)
-        if name == "__unsupported__" and isinstance(operation.get("op"), str):
-            name = f"unsupported declaration: {operation['op']}"
+        declared_name = operation.get("op", operation.get("type"))
+        if name == "__unsupported__" and isinstance(declared_name, str):
+            name = f"unsupported declaration: {declared_name}"
         parsed.append(Operation(name, collection, payload, location))
     return tuple(parsed)
 
