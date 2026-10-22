@@ -176,9 +176,9 @@ Supported operations are deliberately limited:
 
 | Operation | Accepted fields | Current behavior |
 | --- | --- | --- |
-| `create_index` | `op`, non-empty `keys` with directions `1` or `-1`, optional boolean `unique`, optional non-empty `name`, optional `build_context` (`unknown` or `high_write`) | `unique: true` emits `MONGO-INDEX-001`; `high_write` emits `MONGO-INDEX-002`. |
+| `create_index` | `op`, non-empty `keys` with directions `1`/`-1` or documented index types `2d`, `2dsphere`, `text`, `hashed`, `$**`; optional boolean `unique`, optional non-empty `name`, optional `build_context` (`unknown` or `high_write`) | `unique: true` emits `MONGO-INDEX-001`; `high_write` emits `MONGO-INDEX-002`. |
 | `drop_collection` | `op` only | Emits `MONGO-DATA-002`. |
-| `delete_many` | `op`, `filter_scope` (`all` or `filtered`), boolean `recovery_plan` | Emits `MONGO-DATA-002`. Raw filters are intentionally unsupported. |
+| `delete_many` | `op`, `filter_scope` (`all` or `filtered`), boolean `recovery_plan` | Emits `MONGO-DATA-002`. The `deleteMany` adapter accepts a JSON-object `filter` only to classify all-versus-filtered scope; it does not evaluate filter semantics. |
 | `update_validator` | `op`, `added_required` array of unique non-empty fields | Each added field emits `MONGO-SCHEMA-001`. |
 | `remove_field` | `op`, `field`, boolean `compatibility_window` | Emits `MONGO-SCHEMA-002` when no compatibility window is declared. |
 | `rename_field` | `op`, `from`, `to`, boolean `compatibility_window` | Emits `MONGO-SCHEMA-002` when no compatibility window is declared. |

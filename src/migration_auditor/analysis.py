@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -174,6 +175,22 @@ def _normalise_operation(raw: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]
             return "__unsupported__", raw
         payload["build_context"] = "high_write"
 
+    if canonical == "change_field_type":
+        for source, target in (("from", "from_type"), ("to", "to_type")):
+            if source in payload:
+                if target in payload:
+                    return "__unsupported__", raw
+                payload[target] = payload.pop(source)
+
+    if canonical == "create_collection" and "options" in payload:
+        options = payload.pop("options")
+        if not isinstance(options, Mapping) or set(options) - {"capped", "size"}:
+            return "__unsupported__", raw
+        for key, value in options.items():
+            if key in payload:
+                return "__unsupported__", raw
+            payload[key] = value
+
     if canonical == "update_validator" and "validator" in payload:
         validator = payload.pop("validator")
         if "added_required" in payload or not isinstance(validator, Mapping):
@@ -267,7 +284,14 @@ def parse_manifest(path: Path) -> tuple[Operation, ...]:
         declared_name = operation.get("op", operation.get("type"))
         if name == "__unsupported__" and isinstance(declared_name, str):
             name = f"unsupported declaration: {declared_name}"
-        parsed.append(Operation(name, collection, payload, location))
+        operation_collection = collection
+        if name in {"create_collection", "drop_collection"} and "collection" in payload:
+            target_collection = payload.pop("collection")
+            if not _field_name(target_collection):
+                name = f"unsupported declaration: {declared_name or name}"
+            else:
+                operation_collection = target_collection
+        parsed.append(Operation(name, operation_collection, payload, location))
     return tuple(parsed)
 
 
@@ -335,6 +359,26 @@ def _field_name(value: Any) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def _index_keys(value: Any) -> bool:
+    """Validate the small, documented subset of BSON index key specifications."""
+    return isinstance(value, Mapping) and bool(value) and all(
+        isinstance(key, str)
+        and bool(key.strip())
+        and (
+            (type(direction) is int and direction in (1, -1))
+            or (isinstance(direction, str) and direction in {"2d", "2dsphere", "text", "hashed", "$**"})
+        )
+        for key, direction in value.items()
+    )
+
+
+def _literal_value(value: Any) -> bool:
+    """Allow only a JSON scalar/null for declarative add-field defaults."""
+    return value is None or isinstance(value, str | int | float | bool) and not (
+        isinstance(value, float) and not math.isfinite(value)
+    )
+
+
 def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding, ...]:
     """Apply deterministic rules to one normalized declarative operation."""
     if operation.name not in SUPPORTED_OPERATIONS:
@@ -346,13 +390,7 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
             return (_unsupported(operation, config),)
         unique = operation.payload.get("unique", False)
         keys = operation.payload.get("keys")
-        valid_keys = isinstance(keys, Mapping) and bool(keys) and all(
-            isinstance(key, str)
-            and bool(key.strip())
-            and type(value) is int
-            and value in (1, -1)
-            for key, value in keys.items()
-        )
+        valid_keys = _index_keys(keys)
         name = operation.payload.get("name")
         valid_name = "name" not in operation.payload or (
             isinstance(name, str) and bool(name.strip())
@@ -418,20 +456,30 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
                 )
             )
     elif operation.name == "create_collection":
-        if set(operation.payload) != {"op"}:
+        if set(operation.payload) - {"op", "capped", "size"}:
+            return (_unsupported(operation, config),)
+        capped, size = operation.payload.get("capped"), operation.payload.get("size")
+        if (capped is not None and not isinstance(capped, bool)) or (
+            size is not None and (type(size) is not int or size <= 0)
+        ):
             return (_unsupported(operation, config),)
     elif operation.name == "drop_index":
-        if set(operation.payload) != {"op", "name"} or not _field_name(operation.payload.get("name")):
+        if set(operation.payload) not in ({"op", "name"}, {"op", "keys"}):
             return (_unsupported(operation, config),)
+        name = operation.payload.get("name")
+        keys = operation.payload.get("keys")
+        if name is not None and not _field_name(name) or keys is not None and not _index_keys(keys):
+            return (_unsupported(operation, config),)
+        index_label = name or ", ".join(f"{key}:{direction}" for key, direction in keys.items())
         if _rule_enabled("MONGO-INDEX-003", config):
             findings.append(
                 _finding(
                     operation, config, rule_id="MONGO-INDEX-003", title="Index removal may affect query performance",
                     default_severity=Severity.MEDIUM, confidence=Confidence.MEDIUM,
                     explanation="Removing an index can change query plans and increase load for dependent queries.",
-                    evidence=(f"drop_index specifies name: {operation.payload['name']}",),
+                    evidence=(f"drop_index specifies index: {index_label}",),
                     remediation="Review query plans and rollout capacity before removing the index.",
-                    index=operation.payload["name"],
+                    index=index_label,
                 )
             )
     elif operation.name == "delete_many":
@@ -477,9 +525,14 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
                     )
                 )
     elif operation.name == "add_field":
-        if set(operation.payload) != {"op", "field", "required"} or not _field_name(operation.payload.get("field")) or not isinstance(operation.payload.get("required"), bool):
+        if set(operation.payload) not in ({"op", "field", "required"}, {"op", "field", "value"}):
             return (_unsupported(operation, config),)
-        if operation.payload["required"] and _rule_enabled("MONGO-SCHEMA-001", config):
+        if not _field_name(operation.payload.get("field")):
+            return (_unsupported(operation, config),)
+        required = operation.payload.get("required", False)
+        if not isinstance(required, bool) or "value" in operation.payload and not _literal_value(operation.payload["value"]):
+            return (_unsupported(operation, config),)
+        if required and _rule_enabled("MONGO-SCHEMA-001", config):
             findings.append(_finding(operation, config, rule_id="MONGO-SCHEMA-001", title="Added field is immediately required", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="Existing documents may not contain the newly required field.", evidence=(f"add_field specifies required field: {operation.payload['field']}",), remediation="Backfill and validate existing documents before enforcing the requirement.", field=operation.payload["field"]))
     elif operation.name == "remove_field":
         if set(operation.payload) != {"op", "field", "compatibility_window"}:
@@ -523,12 +576,14 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
         if not any(safeguards) and _rule_enabled("MONGO-DATA-001", config):
             findings.append(_finding(operation, config, rule_id="MONGO-DATA-001", title="Bulk update has no declared execution bounds", default_severity=Severity.HIGH, confidence=Confidence.HIGH, explanation="An unbounded multi-document update can overload the target collection and be difficult to resume safely.", evidence=(f"bulk_update specifies filter_scope: {operation.payload['filter_scope']} with no batching, checkpointing, or throttling",), remediation="Use bounded batches and declare checkpointing or throttling before deployment."))
     elif operation.name == "increment":
-        if set(operation.payload) != {"op", "field", "idempotent"}:
+        if set(operation.payload) not in ({"op", "field", "idempotent"}, {"op", "field", "amount", "idempotent"}):
             return (_unsupported(operation, config),)
-        field, idempotent = operation.payload.get("field"), operation.payload.get("idempotent")
+        field, idempotent, amount = operation.payload.get("field"), operation.payload.get("idempotent"), operation.payload.get("amount", 1)
         if not _field_name(field) or not isinstance(idempotent, bool):
             return (_unsupported(operation, config),)
-        if not idempotent and _rule_enabled("MONGO-EXEC-001", config):
+        if isinstance(amount, bool) or not isinstance(amount, int | float) or not math.isfinite(amount):
+            return (_unsupported(operation, config),)
+        if not idempotent and amount != 0 and _rule_enabled("MONGO-EXEC-001", config):
             findings.append(_finding(operation, config, rule_id="MONGO-EXEC-001", title="Increment is not retry-idempotent", default_severity=Severity.MEDIUM, confidence=Confidence.HIGH, explanation="Retrying an increment can apply the mutation more than once.", evidence=(f"increment specifies idempotent: false for {field}",), remediation="Use an idempotency key or a retry-safe update strategy.", field=field))
     return tuple(findings)
 
