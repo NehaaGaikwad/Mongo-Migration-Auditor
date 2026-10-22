@@ -188,6 +188,12 @@ Supported operations are deliberately limited:
 
 Any unknown operation, dynamic operation, non-object operation, or unsupported field emits `MONGO-ANALYSIS-001`; it is never silently treated as safe. See [docs/rules.md](docs/rules.md) for rule rationale and remediation.
 
+`MONGO-ANALYSIS-001` is also used for malformed declarations, but reports distinguish
+them: `unsupported_operations_count` counts unknown/dynamic operations, while
+`malformed_operations_count` counts recognized operation names with invalid,
+ambiguous, or unsafe fields. Both are fail-closed findings and cause a policy failure
+regardless of the configured severity threshold; neither is a policy pass.
+
 ### Practical MongoDB JSON aliases
 
 The declarative JSON adapter also accepts common MongoDB-style aliases and converts

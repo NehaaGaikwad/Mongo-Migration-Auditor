@@ -26,6 +26,7 @@ def test_example_manifests_produce_risk_and_explicit_unsupported_result() -> Non
         "MONGO-INDEX-001",
     }
     assert report.unsupported_count == 1
+    assert report.malformed_count == 0
 
 
 def test_unknown_operation_is_not_silently_ignored(tmp_path: Path) -> None:

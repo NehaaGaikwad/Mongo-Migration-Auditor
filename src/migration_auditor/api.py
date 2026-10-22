@@ -55,11 +55,11 @@ def _error(status_code: int, detail: str) -> None:
     raise HTTPException(status_code=status_code, detail=detail)
 
 
-def _policy_failed(config: AuditorConfig, report_findings: Iterable[object]) -> bool:
+def _policy_failed(config: AuditorConfig, report: object) -> bool:
     """Apply the configured threshold rather than treating any finding as a failure."""
-    return any(
+    return report.has_unanalyzable_input or any(
         _SEVERITY_ORDER[Severity(finding.severity)] >= _SEVERITY_ORDER[config.policy.fail_on]
-        for finding in report_findings
+        for finding in report.findings
     )
 
 
@@ -151,7 +151,7 @@ async def audit(files: list[UploadFile] = File(...)) -> dict[str, object]:
     response["errors"] = [
         error.replace(Path(temporary).as_posix(), "uploaded") for error in response["errors"]
     ]
-    response["policy_failed"] = _policy_failed(config, report.findings)
+    response["policy_failed"] = _policy_failed(config, report)
     response["status"] = "invalid_input" if report.errors else (
         "policy_failed" if response["policy_failed"] else "completed"
     )

@@ -55,3 +55,13 @@ def test_invalid_stress_manifest_values_remain_unsupported(tmp_path: Path) -> No
         "MONGO-ANALYSIS-001",
         "MONGO-EXEC-001",
     ]
+    assert report.unsupported_count == 0
+    assert report.malformed_count == 3
+
+
+def test_unknown_operation_remains_an_unsupported_operation(tmp_path: Path) -> None:
+    report = _report(tmp_path, [{"type": "runCommand", "command": {"collMod": "users"}}])
+
+    assert report.unsupported_count == 1
+    assert report.malformed_count == 0
+    assert report.findings[0].title == "Unsupported migration operation"

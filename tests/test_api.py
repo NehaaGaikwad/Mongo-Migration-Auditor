@@ -39,7 +39,11 @@ def test_policy_failure_uses_configured_threshold() -> None:
         policy=PolicyConfig(fail_on=Severity.CRITICAL),
     )
 
-    assert _policy_failed(critical_policy, (finding,)) is False
+    class Report:
+        findings = (finding,)
+        has_unanalyzable_input = False
+
+    assert _policy_failed(critical_policy, Report()) is False
 
 
 def test_audit_returns_real_analyzer_finding() -> None:

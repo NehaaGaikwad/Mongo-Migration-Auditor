@@ -63,6 +63,16 @@ def test_check_uses_distinct_error_exit_code(tmp_path: Path, capsys: object) -> 
     assert "ERROR:" in capsys.readouterr().out  # type: ignore[attr-defined]
 
 
+def test_check_fails_closed_for_unsupported_operation(tmp_path: Path) -> None:
+    config = _write_config(
+        tmp_path,
+        '{"version": 1, "collection": "users", "operations": [{"type": "runCommand", "command": {}}]}',
+        fail_on="critical",
+    )
+
+    assert main(["check", "--config", str(config)]) == EXIT_POLICY_FAILURE
+
+
 def test_rules_and_version_commands(capsys: object) -> None:
     assert main(["rules"]) == EXIT_OK
     assert "MONGO-INDEX-001" in capsys.readouterr().out  # type: ignore[attr-defined]

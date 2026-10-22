@@ -20,6 +20,7 @@ def test_extensive_real_world_manifest_uses_supported_rules() -> None:
         "MONGO-DATA-001",
     ]
     assert report.unsupported_count == 0
+    assert report.malformed_count == 0
 
 
 def test_write_rate_is_strict_and_conflicts_fail_closed(tmp_path: Path) -> None:

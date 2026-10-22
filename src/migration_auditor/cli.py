@@ -45,6 +45,7 @@ def _render_text(report: Any) -> str:
         f"Files analyzed: {len(report.files)}",
         f"Findings: {len(report.findings)}",
         f"Unsupported operations: {report.unsupported_count}",
+        f"Malformed operations: {report.malformed_count}",
     ]
     for finding in report.findings:
         location = finding.location.file if finding.location else "<unknown>"
@@ -71,7 +72,7 @@ def _run_check(args: argparse.Namespace) -> int:
         print(_render_text(report))
     if not report.successful:
         return EXIT_ANALYSIS_ERROR
-    return EXIT_POLICY_FAILURE if _policy_failure(report.findings, config.policy.fail_on) else EXIT_OK
+    return EXIT_POLICY_FAILURE if report.has_unanalyzable_input or _policy_failure(report.findings, config.policy.fail_on) else EXIT_OK
 
 
 def main(argv: Sequence[str] | None = None) -> int:

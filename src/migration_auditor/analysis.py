@@ -70,6 +70,7 @@ class Operation:
     collection: str
     payload: Mapping[str, Any]
     location: SourceLocation
+    classification: str = "supported"
 
 
 @dataclass(frozen=True)
@@ -80,7 +81,24 @@ class AnalysisReport:
 
     @property
     def unsupported_count(self) -> int:
-        return sum(finding.rule_id == "MONGO-ANALYSIS-001" for finding in self.findings)
+        return sum(
+            finding.rule_id == "MONGO-ANALYSIS-001"
+            and finding.title == "Unsupported migration operation"
+            for finding in self.findings
+        )
+
+    @property
+    def malformed_count(self) -> int:
+        return sum(
+            finding.rule_id == "MONGO-ANALYSIS-001"
+            and finding.title == "Malformed migration operation"
+            for finding in self.findings
+        )
+
+    @property
+    def has_unanalyzable_input(self) -> bool:
+        """Unsupported and malformed declarations cannot be treated as a policy pass."""
+        return self.unsupported_count > 0 or self.malformed_count > 0
 
     @property
     def successful(self) -> bool:
@@ -91,6 +109,7 @@ class AnalysisReport:
             "status": "completed" if self.successful else "error",
             "files_analyzed": len(self.files),
             "unsupported_operations_count": self.unsupported_count,
+            "malformed_operations_count": self.malformed_count,
             "findings": [finding.to_dict() for finding in self.findings],
             "errors": list(self.errors),
         }
@@ -278,20 +297,28 @@ def parse_manifest(path: Path) -> tuple[Operation, ...]:
     for number, operation in enumerate(operations, start=1):
         location = SourceLocation(file=_source_path(path), operation=f"operations[{number}]")
         if not isinstance(operation, Mapping):
-            parsed.append(Operation("__unsupported__", collection, {}, location))
+            parsed.append(Operation("__malformed__", collection, {}, location, "malformed"))
             continue
         name, payload = _normalise_operation(operation)
         declared_name = operation.get("op", operation.get("type"))
-        if name == "__unsupported__" and isinstance(declared_name, str):
-            name = f"unsupported declaration: {declared_name}"
+        classification = "supported"
+        if name == "__unsupported__":
+            classification = (
+                "malformed"
+                if isinstance(declared_name, str) and declared_name in OPERATION_ALIASES
+                else "unsupported"
+            )
+            if isinstance(declared_name, str):
+                name = f"{classification} declaration: {declared_name}"
         operation_collection = collection
         if name in {"create_collection", "drop_collection"} and "collection" in payload:
             target_collection = payload.pop("collection")
             if not _field_name(target_collection):
                 name = f"unsupported declaration: {declared_name or name}"
+                classification = "malformed"
             else:
                 operation_collection = target_collection
-        parsed.append(Operation(name, operation_collection, payload, location))
+        parsed.append(Operation(name, operation_collection, payload, location, classification))
     return tuple(parsed)
 
 
@@ -307,15 +334,25 @@ def _severity(rule_id: str, default: Severity, config: RuleConfig) -> Severity:
 
 
 def _unsupported(operation: Operation, config: RuleConfig) -> Finding:
-    name = operation.name if operation.name != "__unsupported__" else "dynamic or malformed operation"
+    malformed = operation.classification == "malformed" or operation.name in SUPPORTED_OPERATIONS
+    kind = "Malformed migration operation" if malformed else "Unsupported migration operation"
+    name = operation.name if operation.name not in {"__unsupported__", "__malformed__"} else "dynamic or malformed operation"
     return Finding.create(
         rule_id="MONGO-ANALYSIS-001",
-        title="Unsupported migration operation",
+        title=kind,
         severity=_severity("MONGO-ANALYSIS-001", Severity.INFO, config),
         confidence=Confidence.HIGH,
-        explanation="This operation is outside the supported declarative manifest subset.",
-        evidence=(f"operation: {name}",),
-        remediation="Rewrite it using a documented supported operation or review it manually.",
+        explanation=(
+            "This declaration uses a supported operation name but has invalid or ambiguous fields."
+            if malformed
+            else "This operation is outside the supported declarative manifest subset."
+        ),
+        evidence=(("malformed operation: " if malformed else "operation: ") + name,),
+        remediation=(
+            "Correct the declaration using the documented schema before running the audit again."
+            if malformed
+            else "Rewrite it using a documented supported operation or review it manually."
+        ),
         documentation_url="docs/rules.md#mongo-analysis-001",
         suppressible=False,
         location=operation.location,
