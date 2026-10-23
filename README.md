@@ -100,8 +100,8 @@ yet. The repository is ready for a Render backend and Vercel frontend:
    exact Vercel URL after the frontend is created (for example
    `https://your-project.vercel.app`). Render supplies `PORT`; do not set it.
 2. In Vercel, import the same repository and set **Root Directory** to `frontend`.
-   Its build command is `npm run build` and output directory is `dist`. Add build
-   environment variable `AUDITOR_API_URL` with the public Render API URL, such as
+   The committed Vercel configuration pins the build command and `dist` output
+   directory. Add build environment variable `AUDITOR_API_URL` with the public Render API URL, such as
    `https://mongo-migration-auditor-api.onrender.com`, then deploy.
 3. Update Render's `ALLOWED_ORIGINS` with the Vercel production URL and redeploy the
    backend. Verify `https://<render-service>/health`, then upload

@@ -6,5 +6,8 @@ services:
     startCommand: uvicorn migration_auditor.api:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # Pin a tested Python runtime; Render otherwise selects a date-dependent default.
+      - key: PYTHON_VERSION
+        value: 3.13.5
       - key: ALLOWED_ORIGINS
         sync: false
