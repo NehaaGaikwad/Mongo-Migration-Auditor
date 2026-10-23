@@ -7,7 +7,7 @@ function escapeHtml(value) { const div = document.createElement("div"); div.text
 function setMessage(text, error = false) { message.textContent = text; message.className = error ? "error" : ""; }
 function render() {
   document.querySelector("#results").hidden = false;
-  const findings = report.findings || [], counts = ["files_analyzed", "unsupported_operations_count"].map(k => [k.replaceAll("_", " "), report[k] || 0]);
+  const findings = report.findings || [], counts = ["files_analyzed", "unsupported_operations_count", "malformed_operations_count"].map(k => [k.replaceAll("_", " "), report[k] || 0]);
   counts.unshift(["findings", findings.length], ["status", report.status]);
   document.querySelector("#summary").innerHTML = counts.map(([k,v]) => `<div class="stat"><strong>${escapeHtml(String(v))}</strong>${escapeHtml(k)}</div>`).join("");
   document.querySelector("#errors").innerHTML = (report.errors || []).map(e => `<p class="errors">${escapeHtml(e)}</p>`).join("");
