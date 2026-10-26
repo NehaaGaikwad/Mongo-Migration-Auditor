@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from migration_auditor.api import MAX_FILE_BYTES, _policy_failed, app
 from migration_auditor.config import AuditorConfig, InputConfig, PolicyConfig
 from migration_auditor.models import Confidence, Finding, Severity
+from migration_auditor.product_store import ProductStore
 
 client = TestClient(app)
 
@@ -96,3 +97,32 @@ def test_common_mongo_aliases_reach_the_real_rule_engine() -> None:
     assert response.status_code == 200
     assert [item["rule_id"] for item in response.json()["findings"]] == ["MONGO-INDEX-001", "MONGO-DATA-001"]
     assert response.json()["findings"][0]["location"]["file"] == "upload-1-migration.migration.json"
+
+
+def test_product_api_scopes_audits_and_rejects_member_admin_access(monkeypatch, tmp_path) -> None:
+    import migration_auditor.api as api_module
+
+    monkeypatch.setattr(api_module, "store", ProductStore(str(tmp_path / "product.sqlite3")))
+    first_response = client.post("/api/auth/signup", json={"email": "first@example.com", "password": "secure password", "display_name": "First", "organization_name": "First Org"})
+    second_response = client.post("/api/auth/signup", json={"email": "second@example.com", "password": "another password", "display_name": "Second", "organization_name": "Second Org"})
+    first_headers = {"Cookie": f"auditor_session={first_response.cookies['auditor_session']}"}
+    second_headers = {"Cookie": f"auditor_session={second_response.cookies['auditor_session']}"}
+    first_org = client.get("/api/me", headers=first_headers).json()["organizations"][0]["id"]
+    created = client.post(f"/api/product/audits?organization_id={first_org}", headers=first_headers, files={"files": ("risk.migration.json", manifest([{"op": "drop_collection"}]), "application/json")})
+
+    assert created.status_code == 200
+    assert len(client.get("/api/product/audits", headers=first_headers).json()) == 1
+    assert client.get("/api/product/audits", headers=second_headers).json() == []
+    assert client.get("/api/admin/users", headers=first_headers).status_code == 403
+
+
+def test_simple_admin_mode_exposes_only_sanitized_in_memory_summary(monkeypatch) -> None:
+    monkeypatch.setenv("SIMPLE_ADMIN_MODE", "true")
+    response = client.post(
+        "/api/audits",
+        files={"files": ("risk.migration.json", manifest([{"op": "drop_collection"}]), "application/json")},
+    )
+    summary = client.get("/api/simple-admin/summary")
+
+    assert response.status_code == 200
+    assert summary.status_code == 401

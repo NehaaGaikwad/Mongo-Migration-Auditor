@@ -17,3 +17,4 @@ htmlcov/
 .env
 .env.local
 .DS_Store
+migration_auditor_product.sqlite3

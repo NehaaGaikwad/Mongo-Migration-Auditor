@@ -7,6 +7,7 @@ code or a shell command.
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import tempfile
@@ -14,7 +15,7 @@ import zipfile
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
 
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import Cookie, FastAPI, File, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
@@ -22,6 +23,7 @@ from migration_auditor import __version__
 from migration_auditor.analysis import analyze
 from migration_auditor.config import AuditorConfig, InputConfig
 from migration_auditor.models import Severity
+from migration_auditor.product_store import ProductStore
 
 MAX_FILES = 10
 MAX_FILE_BYTES = 1_000_000
@@ -43,16 +45,48 @@ def _origins() -> list[str]:
 
 
 app = FastAPI(title="Mongo Migration Auditor API", version=__version__)
+store = ProductStore()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins(),
     allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "Authorization"],
+    allow_credentials=True,
 )
 
 
 def _error(status_code: int, detail: str) -> None:
     raise HTTPException(status_code=status_code, detail=detail)
+
+
+def _current_user(authorization: str | None, session: str | None = None) -> dict[str, object]:
+    token = session or (authorization[7:] if authorization and authorization.startswith("Bearer ") else None)
+    if not token:
+        _error(401, "Authentication required")
+    user = store.user_for_token(token)
+    if not user:
+        _error(401, "Invalid or expired session")
+    return user
+
+
+def _admin(authorization: str | None, session: str | None = None) -> dict[str, object]:
+    user = _current_user(authorization, session)
+    if user["role"] != "admin":
+        store.event(str(user["id"]), "admin_access", "admin_api", "denied")
+        _error(403, "Platform admin access required")
+    return user
+
+
+def _demo_mode() -> bool:
+    """Enable the intentionally limited, local-only admin summary explicitly."""
+    return os.getenv("SIMPLE_ADMIN_MODE", "false").lower() == "true"
+
+
+def _record_demo_run(report: dict[str, object]) -> None:
+    context = store.simple_context()
+    if context:
+        user, organization = context
+        store.save_audit(str(organization["id"]), str(user["id"]), report, __version__)
 
 
 def _policy_failed(config: AuditorConfig, report: object) -> bool:
@@ -134,6 +168,112 @@ def health() -> dict[str, str]:
     return {"status": "ok", "version": __version__}
 
 
+@app.get("/api/simple-admin/summary")
+def simple_admin_summary(
+    authorization: str | None = Header(default=None),
+    auditor_session: str | None = Cookie(default=None),
+) -> dict[str, object]:
+    """Local dashboard data, available only to an authenticated platform admin."""
+    if not _demo_mode():
+        _error(404, "Simple admin mode is disabled")
+    _admin(authorization, auditor_session)
+    runs = store.simple_runs()
+    return {
+        "mode": "simple_local",
+        "audits": len(runs),
+        "execution_failures": sum(run["status"] != "completed" for run in runs),
+        "policy_failures": sum(run["policy_status"] == "failed" for run in runs),
+        "runs": runs,
+    }
+
+
+def _session_response(result: dict[str, object], response: Response) -> dict[str, object]:
+    secure = os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
+    response.set_cookie("auditor_session", str(result["token"]), httponly=True, secure=secure,
+                        samesite="none" if secure else "lax", max_age=7 * 24 * 60 * 60, path="/")
+    return {"user": result["user"]}
+
+
+@app.post("/api/auth/signup")
+def signup(payload: dict[str, str], response: Response) -> dict[str, object]:
+    email, password = payload.get("email", "").strip(), payload.get("password", "")
+    name, organization = payload.get("display_name", "").strip(), payload.get("organization_name", "").strip()
+    if not email or "@" not in email or len(password) < 12 or not name or not organization:
+        _error(422, "Email, display name, organization, and a password of at least 12 characters are required")
+    try:
+        result = store.signup(email, password, name, organization)
+    except ValueError as error:
+        _error(409, str(error))
+    store.event(str(result["user"]["id"]), "signup", "account", "success")
+    return _session_response(result, response)
+
+
+@app.post("/api/auth/login")
+def login(payload: dict[str, str], response: Response) -> dict[str, object]:
+    try:
+        result = store.login(payload.get("email", ""), payload.get("password", ""))
+    except ValueError as error:
+        _error(401, str(error))
+    store.event(str(result["user"]["id"]), "login", "session", "success")
+    return _session_response(result, response)
+
+
+@app.post("/api/auth/logout")
+def logout(response: Response, authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> dict[str, str]:
+    user = _current_user(authorization, auditor_session)
+    token = auditor_session or authorization[7:]
+    store.end_session(token)
+    response.delete_cookie("auditor_session", path="/")
+    store.event(str(user["id"]), "logout", "session", "success")
+    return {"status": "ok"}
+
+
+@app.get("/api/me")
+def me(authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> dict[str, object]:
+    user = _current_user(authorization, auditor_session)
+    return {"user": user, "organizations": store.organizations_for(str(user["id"]))}
+
+
+@app.get("/api/product/audits")
+def product_audits(authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> list[dict[str, object]]:
+    return store.audits_for(_current_user(authorization, auditor_session))
+
+
+@app.get("/api/admin/users")
+def admin_users(authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> list[dict[str, object]]:
+    admin = _admin(authorization, auditor_session)
+    store.event(str(admin["id"]), "list_users", "users", "success")
+    return store.admin_users()
+
+
+@app.get("/api/admin/organizations")
+def admin_organizations(authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> list[dict[str, object]]:
+    admin = _admin(authorization, auditor_session)
+    store.event(str(admin["id"]), "list_organizations", "organizations", "success")
+    return store.admin_orgs()
+
+
+@app.get("/api/admin/audits")
+def admin_audits(authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> list[dict[str, object]]:
+    admin = _admin(authorization, auditor_session)
+    store.event(str(admin["id"]), "list_audits", "audit_runs", "success")
+    return store.audits_for(admin, all_tenants=True)
+
+
+@app.get("/api/admin/security-events")
+def admin_security_events(authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> list[dict[str, object]]:
+    admin = _admin(authorization, auditor_session)
+    store.event(str(admin["id"]), "list_security_events", "security_events", "success")
+    return store.security_events()
+
+
+@app.get("/api/admin/metrics")
+def admin_metrics(authorization: str | None = Header(default=None), auditor_session: str | None = Cookie(default=None)) -> dict[str, int]:
+    admin = _admin(authorization, auditor_session)
+    store.event(str(admin["id"]), "read_metrics", "platform_metrics", "success")
+    return store.metrics()
+
+
 @app.post("/api/audits")
 async def audit(files: list[UploadFile] = File(...)) -> dict[str, object]:
     """Analyze uploaded declarative manifests and return the package report."""
@@ -155,7 +295,30 @@ async def audit(files: list[UploadFile] = File(...)) -> dict[str, object]:
     response["status"] = "invalid_input" if report.errors else (
         "policy_failed" if response["policy_failed"] else "completed"
     )
+    if _demo_mode():
+        _record_demo_run(response)
     if report.errors:
         # The client still receives the real partial report and clear input errors.
         return JSONResponse(status_code=422, content=response)
     return response
+
+
+@app.post("/api/product/audits")
+async def create_product_audit(
+    organization_id: str,
+    files: list[UploadFile] = File(...),
+    authorization: str | None = Header(default=None),
+    auditor_session: str | None = Cookie(default=None),
+) -> dict[str, object]:
+    """Persist a tenant-authorized audit summary without retaining raw uploads."""
+    user = _current_user(authorization, auditor_session)
+    if not store.owns_org(str(user["id"]), organization_id):
+        _error(403, "You do not have access to this organization")
+    result = await audit(files)
+    if isinstance(result, JSONResponse):
+        report = json.loads(result.body)
+    else:
+        report = result
+    run_id = store.save_audit(organization_id, str(user["id"]), report, __version__)
+    store.event(str(user["id"]), "create_audit", run_id, "success")
+    return {"run_id": run_id, "report": report}

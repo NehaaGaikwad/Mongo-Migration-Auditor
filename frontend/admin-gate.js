@@ -1,0 +1,1 @@
+(async()=>{const api=window.AUDITOR_API_URL||'http://localhost:8000';try{const response=await fetch(`${api}/api/me`,{credentials:'include'});const data=response.ok?await response.json():null;if(!data||data.user.role!=='admin'){location.replace(data?'index.html':'auth.html');return}document.body.style.visibility='visible'}catch(_){location.replace('auth.html')}})();
