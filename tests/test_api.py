@@ -5,9 +5,12 @@ import json
 import zipfile
 from pathlib import Path
 
+import pytest
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.testclient import TestClient
 
-from migration_auditor.api import MAX_FILE_BYTES, _policy_failed, app
+from migration_auditor.api import MAX_FILE_BYTES, _origin_regex, _origins, _policy_failed, app
 from migration_auditor.config import AuditorConfig, InputConfig, PolicyConfig
 from migration_auditor.models import Confidence, Finding, Severity
 from migration_auditor.product_store import ProductStore
@@ -126,3 +129,124 @@ def test_simple_admin_mode_exposes_only_sanitized_in_memory_summary(monkeypatch)
 
     assert response.status_code == 200
     assert summary.status_code == 401
+
+
+def test_cors_accepts_both_vercel_origins_and_returns_headers_on_unauthorized_error(monkeypatch) -> None:
+    primary = "https://mongo-migration-auditor-frontend.vercel.app"
+    secondary = "https://mongo-migration-auditor-frontend-6xpdebs9h.vercel.app"
+    monkeypatch.setenv("ALLOWED_ORIGINS", f" {primary}/, {secondary} ")
+    cors_app = FastAPI()
+    cors_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=_origins(),
+        allow_origin_regex=_origin_regex(),
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type", "Authorization"],
+        allow_credentials=True,
+    )
+
+    @cors_app.post("/api/auth/login")
+    def cors_login() -> None:
+        return None
+
+    @cors_app.get("/api/me")
+    def cors_me() -> None:
+        from fastapi import HTTPException
+
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    cors_client = TestClient(cors_app)
+    for origin in (primary, secondary):
+        preflight = cors_client.options(
+            "/api/auth/login",
+            headers={
+                "Origin": origin,
+                "Access-Control-Request-Method": "POST",
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        error = cors_client.get("/api/me", headers={"Origin": origin})
+        assert preflight.status_code == 200
+        assert preflight.headers["access-control-allow-origin"] == origin
+        assert preflight.headers["access-control-allow-credentials"] == "true"
+        assert error.status_code == 401
+        assert error.headers["access-control-allow-origin"] == origin
+
+    rejected = cors_client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "https://untrusted.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    assert rejected.status_code == 400
+    assert "access-control-allow-origin" not in rejected.headers
+
+
+def test_origins_reject_malformed_values(monkeypatch) -> None:
+    monkeypatch.setenv("ALLOWED_ORIGINS", "https://example.com/not-an-origin")
+    with pytest.raises(ValueError, match="ALLOWED_ORIGINS"):
+        _origins()
+
+
+def test_preview_origin_regex_is_opt_in_and_project_scoped(monkeypatch) -> None:
+    monkeypatch.setenv(
+        "ALLOWED_ORIGIN_REGEX",
+        r"^https://mongo-migration-auditor-frontend(?:-[a-z0-9-]+)?\.vercel\.app$",
+    )
+    cors_app = FastAPI()
+    cors_app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[],
+        allow_origin_regex=_origin_regex(),
+        allow_methods=["GET", "POST"],
+        allow_headers=["Content-Type"],
+        allow_credentials=True,
+    )
+
+    @cors_app.post("/api/auth/login")
+    def preview_login() -> None:
+        return None
+
+    cors_client = TestClient(cors_app)
+    allowed = cors_client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "https://mongo-migration-auditor-frontend-g5hbbb.vercel.app",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+    rejected = cors_client.options(
+        "/api/auth/login",
+        headers={
+            "Origin": "https://mongo-migration-auditor-frontend-evil.example",
+            "Access-Control-Request-Method": "POST",
+        },
+    )
+
+    assert allowed.status_code == 200
+    assert allowed.headers["access-control-allow-origin"] == "https://mongo-migration-auditor-frontend-g5hbbb.vercel.app"
+    assert rejected.status_code == 400
+
+
+def test_login_session_cookie_is_secure_and_continues_to_me(monkeypatch, tmp_path) -> None:
+    import migration_auditor.api as api_module
+
+    monkeypatch.setattr(api_module, "store", ProductStore(str(tmp_path / "product.sqlite3")))
+    monkeypatch.setenv("SESSION_COOKIE_SECURE", "true")
+    isolated_client = TestClient(app, base_url="https://testserver")
+    signup_response = isolated_client.post(
+        "/api/auth/signup",
+        json={
+            "email": "member@example.com",
+            "password": "a sufficiently long password",
+            "display_name": "Member",
+            "organization_name": "Member Org",
+        },
+    )
+
+    assert signup_response.status_code == 200
+    assert "HttpOnly" in signup_response.headers["set-cookie"]
+    assert "SameSite=none" in signup_response.headers["set-cookie"]
+    assert "Secure" in signup_response.headers["set-cookie"]
+    assert isolated_client.get("/api/me").json()["user"]["email"] == "member@example.com"

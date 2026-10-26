@@ -17,5 +17,5 @@ await cp("admin-gate.css", "dist/admin-gate.css");
 await cp("admin-gate.js", "dist/admin-gate.js");
 await cp("auth.html", "dist/auth.html");
 await cp("auth.js", "dist/auth.js");
-const apiUrl = process.env.AUDITOR_API_URL;
+const apiUrl = process.env.AUDITOR_API_URL?.replace(/\/+$/, "");
 await writeFile("dist/config.js", apiUrl ? `window.AUDITOR_API_URL=${JSON.stringify(apiUrl)};\n` : "window.AUDITOR_API_URL=`${window.location.protocol}//${window.location.hostname}:8000`;\n");

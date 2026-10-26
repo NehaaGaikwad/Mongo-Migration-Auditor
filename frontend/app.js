@@ -1,4 +1,4 @@
-const API_URL = window.AUDITOR_API_URL || `${window.location.protocol}//${window.location.hostname}:8000`;
+const API_URL = (window.AUDITOR_API_URL || `${window.location.protocol}//${window.location.hostname}:8000`).replace(/\/+$/, "");
 const filesInput = document.querySelector("#files"), selected = document.querySelector("#selected-files"), message = document.querySelector("#message");
 let report, sessionUser;
 

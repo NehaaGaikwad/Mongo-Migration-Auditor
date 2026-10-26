@@ -9,11 +9,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import tempfile
 import zipfile
 from collections.abc import Iterable
 from pathlib import Path, PurePosixPath
+from urllib.parse import urlsplit
 
 from fastapi import Cookie, FastAPI, File, Header, HTTPException, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,9 +41,40 @@ _SEVERITY_ORDER = {
 
 
 def _origins() -> list[str]:
-    """Read explicit browser origins; localhost is useful for local development."""
+    """Read and normalize explicit browser origins for credentialed CORS."""
     configured = os.getenv("ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173")
-    return [origin.strip() for origin in configured.split(",") if origin.strip()]
+    origins: list[str] = []
+    for configured_origin in configured.split(","):
+        candidate = configured_origin.strip().rstrip("/")
+        if not candidate:
+            continue
+        parsed = urlsplit(candidate)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.netloc
+            or parsed.path
+            or parsed.query
+            or parsed.fragment
+            or parsed.username
+            or parsed.password
+        ):
+            raise ValueError("ALLOWED_ORIGINS must contain comma-separated http(s) origins only")
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin not in origins:
+            origins.append(origin)
+    return origins
+
+
+def _origin_regex() -> str | None:
+    """Read an optional, administrator-controlled origin pattern for preview deployments."""
+    configured = os.getenv("ALLOWED_ORIGIN_REGEX", "").strip()
+    if not configured:
+        return None
+    try:
+        re.compile(configured)
+    except re.error as error:
+        raise ValueError("ALLOWED_ORIGIN_REGEX must be a valid regular expression") from error
+    return configured
 
 
 app = FastAPI(title="Mongo Migration Auditor API", version=__version__)
@@ -49,6 +82,7 @@ store = ProductStore()
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins(),
+    allow_origin_regex=_origin_regex(),
     allow_methods=["GET", "POST"],
     allow_headers=["Content-Type", "Authorization"],
     allow_credentials=True,
