@@ -103,3 +103,29 @@ def test_config_rejects_non_string_audit_store_names(key: str) -> None:
         AuditorConfig.from_mapping(
             {"inputs": {"migration_paths": ["migrations"]}, "audit_store": {key: 123}}
         )
+
+
+def test_config_rejects_same_preflight_and_metadata_database_without_uri_leak() -> None:
+    raw = {
+        "inputs": {"migration_paths": ["migrations"]},
+        "audit_store": {"uri": "mongodb://meta:metadata-secret@LOCALHOST/metadata", "database": "app"},
+        "preflight": {"uri": "mongodb://target:target-secret@localhost:27017/other", "database": "app"},
+    }
+
+    with pytest.raises(ConfigurationError, match="different databases") as error:
+        AuditorConfig.from_mapping(raw)
+
+    assert "metadata-secret" not in str(error.value)
+    assert "target-secret" not in str(error.value)
+
+
+def test_config_accepts_different_databases_on_same_endpoint() -> None:
+    config = AuditorConfig.from_mapping(
+        {
+            "inputs": {"migration_paths": ["migrations"]},
+            "audit_store": {"uri": "mongodb://meta:secret@localhost/metadata", "database": "auditor_meta"},
+            "preflight": {"uri": "mongodb://ro:secret@localhost:27017/app", "database": "app_staging"},
+        }
+    )
+
+    assert config.preflight.enabled

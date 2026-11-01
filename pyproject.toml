@@ -49,7 +49,7 @@ testpaths = ["tests"]
 addopts = ["-q", "-p", "no:cacheprovider"]
 pythonpath = ["src"]
 markers = [
-  "integration: requires a disposable MongoDB instance configured by MIGRATION_AUDITOR_TEST_MONGODB_URI",
+  "integration: audit-store uses MIGRATION_AUDITOR_TEST_MONGODB_URI; preflight uses separate fixture and read-only target URI variables",
 ]
 
 [tool.ruff]

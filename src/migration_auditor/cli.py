@@ -79,6 +79,8 @@ def _render_text(report: Any) -> str:
         lines.append(f"{finding.severity.upper()} {finding.rule_id} {location}{operation}: {finding.title}")
         lines.append(f"  Evidence: {finding.evidence[0]}")
         lines.append(f"  Remediation: {finding.remediation}")
+    for check in report.preflight_checks:
+        lines.append(f"PREFLIGHT {check.status.upper()} {check.collection} {check.operation}: {check.explanation}")
     for error in report.errors:
         lines.append(f"ERROR: {error}")
     return "\n".join(lines)

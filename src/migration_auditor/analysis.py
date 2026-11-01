@@ -85,6 +85,7 @@ class AnalysisReport:
     findings: tuple[Finding, ...]
     errors: tuple[str, ...]
     baseline_diffs: tuple[BaselineDiff, ...] = ()
+    preflight_checks: tuple[Any, ...] = ()
 
     @property
     def unsupported_count(self) -> int:
@@ -109,16 +110,25 @@ class AnalysisReport:
 
     @property
     def successful(self) -> bool:
-        return not self.errors
+        return not self.errors and not any(
+            check.status in {"incomplete", "unknown"} for check in self.preflight_checks
+        )
 
     def to_dict(self) -> dict[str, Any]:
+        if self.errors:
+            status = "error"
+        elif any(check.status in {"incomplete", "unknown"} for check in self.preflight_checks):
+            status = "incomplete"
+        else:
+            status = "completed"
         return {
-            "status": "completed" if self.successful else "error",
+            "status": status,
             "files_analyzed": len(self.files),
             "unsupported_operations_count": self.unsupported_count,
             "malformed_operations_count": self.malformed_count,
             "findings": [finding.to_dict() for finding in self.findings],
             "baseline_diffs": [diff.to_dict() for diff in self.baseline_diffs],
+            "preflight": [check.to_dict() for check in self.preflight_checks],
             "errors": list(self.errors),
         }
 
@@ -700,11 +710,23 @@ def analyze(config: AuditorConfig) -> AnalysisReport:
                     findings.append(finding)
         baseline_diffs = tracker.build_diffs()
 
+    preflight_checks: tuple[Any, ...] = ()
+    if config.preflight.enabled:
+        from migration_auditor.preflight import run_preflight
+
+        preflight_findings, preflight_checks = run_preflight(files, config.preflight)
+        findings.extend(preflight_findings)
+    else:
+        from migration_auditor.preflight import PreflightCheck
+
+        preflight_checks = (PreflightCheck("*", "connection", "skipped", "Preflight is not configured."),)
+
     return AnalysisReport(
         files=files,
         findings=tuple(findings),
         errors=tuple(errors),
         baseline_diffs=baseline_diffs,
+        preflight_checks=preflight_checks,
     )
 
 
