@@ -2,7 +2,7 @@
 
 A safety-focused CI/CD check for MongoDB migrations. The planned tool will inspect a deliberately small, documented subset of migration and schema/index inputs before deployment, identify known risks, and make uncertainty explicit.
 
-> **Project status:** Milestone 4 — the offline CLI now detects documented validator, field-compatibility, type-change, index-operational, destructive-operation, backfill-bound, and retry-idempotency risks in the safe declarative manifest subset. Baseline comparison, MongoDB preflight, and broader migration-framework support remain planned.
+> **Project status:** Milestone 6 — the offline CLI supports baseline-aware analysis, and optional bounded MongoDB preflight checks are available for explicitly configured staging databases.
 
 ## Why this exists
 
@@ -129,16 +129,33 @@ A deliberately sanitized example is available in [docs/sample-audit-record.json]
 
 ### Optional disposable MongoDB integration test
 
-Start the local service as described below, then run the opt-in test against it:
+The audit-store integration test still uses `MIGRATION_AUDITOR_TEST_MONGODB_URI`.
+The preflight integration test uses two separate environment variables:
+
+- `MIGRATION_AUDITOR_TEST_MONGODB_FIXTURE_URI`: write-capable test-only identity for inserting synthetic fixtures and dropping the generated database.
+- `MIGRATION_AUDITOR_TEST_MONGODB_TARGET_URI`: read-only identity used by preflight and checked with a denied insert attempt.
+
+Both URIs must point to the same disposable test cluster. Because the database name
+is randomly generated on each run, the fixture identity needs database-creation and
+drop permissions on that test cluster, while the target identity needs read access
+to the generated database. Grant the target identity a read-only role such as
+`readAnyDatabase` only on a dedicated test cluster. Never use these broad test roles
+or credentials on production. Inject the values through a protected environment or
+secret manager rather than placing credentials in the repository or shell command
+history. Then run:
 
 ```powershell
-docker compose up -d mongo
-$env:MIGRATION_AUDITOR_TEST_MONGODB_URI = "mongodb://localhost:27017"
 python -m pytest -m integration
-Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_URI
+Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_FIXTURE_URI
+Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_TARGET_URI
 ```
 
-The test creates a randomly named database and drops only that generated database during cleanup. Regular `python -m pytest` skips this integration test when the environment variable is absent.
+The preflight test inserts fixtures through the fixture identity, verifies the target
+identity receives MongoDB authorization code 13 on an insert attempt, then runs
+preflight through that read-only target identity. Cleanup drops only the generated
+database through the fixture identity. Regular `python -m pytest` skips the live
+preflight test when either preflight URI is absent. Do not run it against production
+or a cluster containing data that is not disposable.
 
 ## CLI and supported migration manifests (Milestone 4)
 
@@ -252,6 +269,22 @@ The compose service exposes MongoDB only on `127.0.0.1:27017`. Stop it with `doc
 
 `.env` is ignored by Git. Its values are placeholders only; do not put a real connection string, password, access token, or application data in source control, test fixtures, logs, or issue reports.
 
+### Optional read-only preflight
+
+Set `[preflight].uri` and `[preflight].database` in a protected TOML config to enable
+checks; ordinary analysis remains offline if these are omitted. Use a dedicated MongoDB
+account with the built-in `read` role on the target database. The tool does not make
+the connection read-only by itself: MongoDB permissions enforce that boundary. Never
+reuse the audit metadata database credentials for the target database.
+
+Preflight checks duplicates for declared unique indexes and checks `$jsonSchema`
+required fields and supported scalar types for validator updates. Scans are bounded by
+`max_documents`, duplicate evidence by `max_duplicate_groups`, and query execution by
+`query_timeout_ms`. Reports label results `sampled`, `incomplete`, `unknown`, or
+`skipped`; sampled success does not mean the full collection was checked. See
+[`docs/architecture.md`](docs/architecture.md#mongodb-preflight) for the TOML example,
+least-privilege role guidance, and disposable integration procedure.
+
 ## Scope decisions
 
 ### Supported inputs today
@@ -334,7 +367,8 @@ python -m pytest
 - **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store — complete locally; disposable-MongoDB evidence is opt-in.
 - **Milestone 3:** First CLI vertical slice using one documented input format — complete locally.
 - **Milestone 4:** Initial deterministic rule catalogue for Manifest v1 — complete locally.
-- **Milestones 5–10:** Baseline analysis, read-only preflight, reporting/policy, CI integration, evaluation, and handover.
+- **Milestone 5:** Baseline-aware migration analysis, diff engine, and sequential drift detection — complete locally.
+- **Milestones 6–10:** Read-only preflight, reporting/policy, CI integration, evaluation, and handover.
 
 See the project master plan for the full acceptance criteria. Claims in this README reflect implemented work only.
 

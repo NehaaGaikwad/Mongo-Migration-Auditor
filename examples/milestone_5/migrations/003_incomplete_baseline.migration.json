@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "collection": "orders",
+  "operations": [
+    {
+      "op": "create_index",
+      "keys": {"order_id": 1},
+      "name": "order_id_1"
+    }
+  ]
+}
+

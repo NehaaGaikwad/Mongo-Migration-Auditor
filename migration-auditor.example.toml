@@ -25,3 +25,15 @@ findings_collection = "audit_findings"
 server_selection_timeout_ms = 5000
 connect_timeout_ms = 5000
 retention_days = 90
+
+[preflight]
+# Both values are required to enable target-database checks. Use a dedicated account
+# granted only the built-in `read` role on this staging database.
+# Never commit credentials; configure these in a protected local/CI config instead.
+uri = ""
+database = ""
+connect_timeout_ms = 5000
+server_selection_timeout_ms = 5000
+query_timeout_ms = 10000
+max_documents = 10000
+max_duplicate_groups = 10
