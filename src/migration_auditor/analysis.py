@@ -9,6 +9,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from migration_auditor.baseline import (
+    BaselineDiff,
+    BaselineError,
+    BaselineStateTracker,
+    load_baseline,
+)
 from migration_auditor.config import AuditorConfig, RuleConfig
 from migration_auditor.models import Confidence, Finding, Severity, SourceLocation
 
@@ -78,6 +84,7 @@ class AnalysisReport:
     files: tuple[Path, ...]
     findings: tuple[Finding, ...]
     errors: tuple[str, ...]
+    baseline_diffs: tuple[BaselineDiff, ...] = ()
 
     @property
     def unsupported_count(self) -> int:
@@ -111,6 +118,7 @@ class AnalysisReport:
             "unsupported_operations_count": self.unsupported_count,
             "malformed_operations_count": self.malformed_count,
             "findings": [finding.to_dict() for finding in self.findings],
+            "baseline_diffs": [diff.to_dict() for diff in self.baseline_diffs],
             "errors": list(self.errors),
         }
 
@@ -531,7 +539,7 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
                 _finding(
                     operation,
                     config,
-                rule_id="MONGO-DATA-002",
+                    rule_id="MONGO-DATA-002",
                     title="Destructive multi-document delete",
                     default_severity=Severity.HIGH,
                     confidence=Confidence.HIGH,
@@ -637,6 +645,20 @@ def analyze(config: AuditorConfig) -> AnalysisReport:
             errors.append(
                 f"configured migration input is not a .migration.json file: {_source_path(path)}"
             )
+
+    tracker: BaselineStateTracker | None = None
+    if config.inputs.baseline_path is not None:
+        if not config.inputs.baseline_path.exists():
+            errors.append(
+                f"configured baseline input not found: {_source_path(config.inputs.baseline_path)}"
+            )
+        else:
+            try:
+                baseline_schema = load_baseline(config.inputs.baseline_path)
+                tracker = BaselineStateTracker(baseline_schema)
+            except BaselineError as exc:
+                errors.append(str(exc))
+
     if not files and not errors:
         errors.append("no .migration.json manifests found in configured migration paths")
     for path in files:
@@ -647,7 +669,43 @@ def analyze(config: AuditorConfig) -> AnalysisReport:
             continue
         for operation in operations:
             findings.extend(analyze_operation(operation, config.rules))
-    return AnalysisReport(files=files, findings=tuple(findings), errors=tuple(errors))
+            if tracker is not None and operation.classification == "supported":
+                tracker.apply_operation(operation)
+
+    baseline_diffs: tuple[BaselineDiff, ...] = ()
+    if tracker is not None:
+        if _rule_enabled("MONGO-BASELINE-001", config.rules):
+            for finding in tracker.findings:
+                severity = _severity("MONGO-BASELINE-001", finding.severity, config.rules)
+                if severity != finding.severity:
+                    findings.append(
+                        Finding(
+                            finding_id=finding.finding_id,
+                            rule_id=finding.rule_id,
+                            title=finding.title,
+                            severity=severity,
+                            confidence=finding.confidence,
+                            explanation=finding.explanation,
+                            evidence=finding.evidence,
+                            remediation=finding.remediation,
+                            documentation_url=finding.documentation_url,
+                            suppressible=finding.suppressible,
+                            location=finding.location,
+                            collection=finding.collection,
+                            field=finding.field,
+                            index=finding.index,
+                        )
+                    )
+                else:
+                    findings.append(finding)
+        baseline_diffs = tracker.build_diffs()
+
+    return AnalysisReport(
+        files=files,
+        findings=tuple(findings),
+        errors=tuple(errors),
+        baseline_diffs=baseline_diffs,
+    )
 
 
 RULES = (
@@ -668,6 +726,11 @@ RULES = (
     {"rule_id": "MONGO-SCHEMA-003", "title": "Field type change lacks a conversion plan", "default_severity": Severity.HIGH.value},
     {"rule_id": "MONGO-DATA-001", "title": "Backfill has no declared execution bounds", "default_severity": Severity.HIGH.value},
     {"rule_id": "MONGO-EXEC-001", "title": "Increment is not retry-idempotent", "default_severity": Severity.MEDIUM.value},
+    {
+        "rule_id": "MONGO-BASELINE-001",
+        "title": "Baseline drift: contradictory or unexpected state transition",
+        "default_severity": Severity.HIGH.value,
+    },
     {
         "rule_id": "MONGO-ANALYSIS-001",
         "title": "Unsupported migration operation",

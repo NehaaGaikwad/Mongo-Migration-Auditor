@@ -13,6 +13,7 @@ from migration_auditor.models import Severity
 KNOWN_RULE_IDS = frozenset(
     {
         "MONGO-ANALYSIS-001",
+        "MONGO-BASELINE-001",
         "MONGO-DATA-001",
         "MONGO-DATA-002",
         "MONGO-EXEC-001",

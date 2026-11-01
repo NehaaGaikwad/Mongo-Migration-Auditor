@@ -47,6 +47,32 @@ def _render_text(report: Any) -> str:
         f"Unsupported operations: {report.unsupported_count}",
         f"Malformed operations: {report.malformed_count}",
     ]
+    if getattr(report, "baseline_diffs", None):
+        lines.append(f"Baseline collections tracked: {len(report.baseline_diffs)}")
+        for diff in report.baseline_diffs:
+            lines.append(f"  Collection '{diff.collection}' (confidence: {diff.confidence.value})")
+            if diff.collections_created:
+                lines.append(f"    Created: {', '.join(diff.collections_created)}")
+            if diff.collections_dropped:
+                lines.append(f"    Dropped: {', '.join(diff.collections_dropped)}")
+            if diff.indexes_added:
+                idx_names = [idx.get("name") or str(idx.get("keys")) for idx in diff.indexes_added]
+                lines.append(f"    Indexes added: {', '.join(idx_names)}")
+            if diff.indexes_dropped:
+                lines.append(f"    Indexes dropped: {', '.join(diff.indexes_dropped)}")
+            if diff.fields_added:
+                lines.append(f"    Fields added: {', '.join(diff.fields_added)}")
+            if diff.fields_removed:
+                lines.append(f"    Fields removed: {', '.join(diff.fields_removed)}")
+            if diff.fields_renamed:
+                renames = [f"{r['from']} -> {r['to']}" for r in diff.fields_renamed]
+                lines.append(f"    Fields renamed: {', '.join(renames)}")
+            if diff.type_changes:
+                types = [f"{t['field']}: {t['from']} -> {t['to']}" for t in diff.type_changes]
+                lines.append(f"    Type changes: {', '.join(types)}")
+            if diff.notes:
+                for note in diff.notes:
+                    lines.append(f"    Note: {note}")
     for finding in report.findings:
         location = finding.location.file if finding.location else "<unknown>"
         operation = f" ({finding.location.operation})" if finding.location else ""

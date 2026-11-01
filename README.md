@@ -2,7 +2,7 @@
 
 A safety-focused CI/CD check for MongoDB migrations. The planned tool will inspect a deliberately small, documented subset of migration and schema/index inputs before deployment, identify known risks, and make uncertainty explicit.
 
-> **Project status:** Milestone 4 — the offline CLI now detects documented validator, field-compatibility, type-change, index-operational, destructive-operation, backfill-bound, and retry-idempotency risks in the safe declarative manifest subset. Baseline comparison, MongoDB preflight, and broader migration-framework support remain planned.
+> **Project status:** Milestone 5 — the offline CLI now supports baseline-aware migration analysis, deterministic before/after diffs, and sequential state-transition validation (MONGO-BASELINE-001) alongside Milestone 4 safety rules. MongoDB preflight and broader migration-framework support remain planned.
 
 ## Why this exists
 
@@ -334,7 +334,8 @@ python -m pytest
 - **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store — complete locally; disposable-MongoDB evidence is opt-in.
 - **Milestone 3:** First CLI vertical slice using one documented input format — complete locally.
 - **Milestone 4:** Initial deterministic rule catalogue for Manifest v1 — complete locally.
-- **Milestones 5–10:** Baseline analysis, read-only preflight, reporting/policy, CI integration, evaluation, and handover.
+- **Milestone 5:** Baseline-aware migration analysis, diff engine, and sequential drift detection — complete locally.
+- **Milestones 6–10:** Read-only preflight, reporting/policy, CI integration, evaluation, and handover.
 
 See the project master plan for the full acceptance criteria. Claims in this README reflect implemented work only.
 
