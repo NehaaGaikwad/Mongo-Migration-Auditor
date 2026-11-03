@@ -1,14 +1,14 @@
 # Database Schema Migration Auditor
 
-A safety-focused CI/CD check for MongoDB migrations. The planned tool will inspect a deliberately small, documented subset of migration and schema/index inputs before deployment, identify known risks, and make uncertainty explicit.
+A safety-focused CI/CD check for MongoDB migrations. The tool inspects a deliberately small, documented subset of migration and schema/index inputs before deployment, identifies known risks, and makes uncertainty explicit.
 
-> **Project status:** Milestone 6 — the offline CLI supports baseline-aware analysis, and optional bounded MongoDB preflight checks are available for explicitly configured staging databases.
+> **Project status:** Milestones 1–10 implemented. The `v0.1.0` release tag is published, GitHub Actions has passed its offline fixture gates and Python 3.11–3.14 matrix, and the Vercel deployment completed successfully.
 
 ## Why this exists
 
 Database migrations can introduce incompatible validators, destructive operations, unsafe backfills, and risky index changes. This project aims to provide deterministic, explainable checks that can run locally and in CI before a production deployment.
 
-The central safety principle is: unsupported or dynamic input must never be silently reported as safe. Future reports will distinguish detected risks, no known risk in the supported subset, and input that could not be analyzed.
+The central safety principle is: unsupported or dynamic input must never be silently reported as safe. Reports distinguish detected risks, no known risk in the supported subset, and input that could not be analyzed.
 
 ## Milestone 1 completion record
 
@@ -20,9 +20,13 @@ The central safety principle is: unsupported or dynamic input must never be sile
 | Placeholder-only environment configuration and local MongoDB guide | Complete |
 | Scope, non-goals, and privacy/safety boundaries | Complete |
 | Public repository URL | Complete: https://github.com/NehaaGaikwad/Mongo-Migration-Auditor |
-| Remote CI run evidence | Pending first published CI run URL |
+| Remote CI run evidence | Complete: [GitHub Actions](https://github.com/NehaaGaikwad/Mongo-Migration-Auditor/actions) passed the offline fixture gates and Python 3.11–3.14 matrix; Vercel deployment also passed. |
 
 The project uses the MIT License; see [LICENSE](LICENSE). The prepared project backlog and completion criteria are in [docs/project-board.md](docs/project-board.md).
+
+## Release status
+
+The signed [`v0.1.0`](https://github.com/NehaaGaikwad/Mongo-Migration-Auditor/tree/v0.1.0) tag identifies the validated release commit (`34cedc5`). This README update is a post-release documentation change; it should be committed separately and does not move the published tag.
 
 ## Requirements
 
@@ -404,16 +408,16 @@ For reviewer handoff, use the [repeatable demo](docs/demo.md),
 
 ## Roadmap
 
-- **Milestone 1:** Repository, scope, reproducible setup — complete locally; publication evidence pending.
+- **Milestone 1:** Repository, scope, reproducible setup — complete; repository and remote CI evidence are published.
 - **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store — complete locally; disposable-MongoDB evidence is opt-in.
 - **Milestone 3:** First CLI vertical slice using one documented input format — complete locally.
 - **Milestone 4:** Initial deterministic rule catalogue for Manifest v1 — complete locally.
 - **Milestone 5:** Baseline-aware migration analysis, diff engine, and sequential drift detection — complete locally.
 - **Milestone 6:** Read-only, bounded MongoDB preflight — complete locally.
 - **Milestone 7:** Reporting, policy, audited suppressions, and MongoDB audit history — complete locally.
-- **Milestone 8:** CI/CD integration — in progress locally; requires a pushed GitHub Actions run for completion evidence.
-- **Milestone 9:** Evaluation and hardening — in progress locally; see [evaluation evidence](docs/evaluation.md).
-- **Milestone 10:** Documentation, demo, and handover — complete locally; release tag and remote CI evidence remain pending a push.
+- **Milestone 8:** CI/CD integration — complete; offline fixture gates, Python 3.11–3.14 checks, and deployment verification passed.
+- **Milestone 9:** Evaluation and hardening — complete; see [evaluation evidence](docs/evaluation.md).
+- **Milestone 10:** Documentation, demo, and handover — complete; signed `v0.1.0` tag is published.
 
 See the project master plan for the full acceptance criteria. Claims in this README reflect implemented work only.
 

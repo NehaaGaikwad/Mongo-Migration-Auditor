@@ -2,7 +2,7 @@
 
 ## Current state
 
-Milestones 1–9 are implemented locally: the package foundation, strict TOML configuration, stable serialized finding/run models, optional MongoDB audit metadata persistence, an offline manifest parser, deterministic Manifest v1 risk rules, baseline-aware migration analysis, bounded read-only MongoDB preflight, auditable report persistence/suppressions/history, CI workflow definitions, and synthetic benchmark/hardening coverage. Remote GitHub Actions evidence remains pending until a reviewed commit is pushed.
+Milestones 1–10 are complete: the package foundation, strict TOML configuration, stable serialized finding/run models, optional MongoDB audit metadata persistence, an offline manifest parser, deterministic Manifest v1 risk rules, baseline-aware migration analysis, bounded read-only MongoDB preflight, auditable report persistence/suppressions/history, CI workflow definitions, benchmark/hardening coverage, and handover documentation. GitHub Actions passed the offline fixture gates and Python 3.11–3.14 matrix, the Vercel deployment completed successfully, and the signed `v0.1.0` tag identifies the validated release commit.
 
 ## Intended components
 
@@ -15,7 +15,7 @@ Milestones 1–9 are implemented locally: the package foundation, strict TOML co
 | Reporter and policy gate | Produces terminal/JSON reports with baseline diffs and applies configured exit policy. | Implemented; exit 1 is a policy finding and exit 2 is an analyzer/config error. Exact, expiring suppressions retain their audit record. |
 | Optional preflight | Runs bounded, read-only checks on an explicitly configured staging target. | Implemented; disabled by default; separate least-privilege credentials. |
 | Audit store | Persists sanitized run metadata and findings; exposes recent-run and recurring-rule summaries. | Implemented as opt-in MongoDB/Offline stores; separate from target application database and excludes secrets/raw documents by default. |
-| CI and evaluation | Offline PR gate, protected optional staging preflight, benchmark fixtures, and artifact output. | Implemented locally; protected preflight never runs on pull requests. Remote workflow execution requires a push. |
+| CI and evaluation | Offline PR gate, protected optional staging preflight, benchmark fixtures, and artifact output. | Remote offline fixture gates and Python 3.11–3.14 checks have passed. Protected preflight never runs on pull requests and remains manually dispatched only with staging credentials. |
 
 ## Decisions recorded for Milestone 1
 

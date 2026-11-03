@@ -13,10 +13,10 @@ one optional metadata store and one optional read-only staging preflight target.
 
 ## Milestone status
 
-- 1–7: implemented locally, including persistence/history and audited suppressions.
-- 8: workflow definitions and local fixture gates implemented; remote Actions evidence is pending a push.
-- 9: B01–B10 synthetic benchmark, parser limits, failure-mode tests, and evaluation record implemented locally.
-- 10: documentation, demo, and handover package implemented locally.
+- 1–7: complete, including persistence/history and audited suppressions.
+- 8: complete; GitHub Actions passed offline fixture gates and the Python 3.11–3.14 matrix, and the Vercel deployment completed successfully.
+- 9: complete; B01–B10 synthetic benchmark, parser limits, failure-mode tests, and evaluation record are included.
+- 10: complete; documentation, demo, and handover package are included, and the signed [`v0.1.0`](https://github.com/NehaaGaikwad/Mongo-Migration-Auditor/tree/v0.1.0) tag is published.
 
 ## Verification
 
@@ -29,6 +29,7 @@ against isolated disposable local MongoDB instances.
 ## Limitations and release checklist
 
 Dynamic/framework-specific migrations are deliberately unsupported. Bounded preflight
-samples are evidence, not proof. Before calling this a release: review the diff,
-configure protected staging secrets, commit and push, capture successful GitHub Actions
-links/artifacts, and create a reviewed version tag. Do not tag before remote checks pass.
+samples are evidence, not proof. The submission release has completed its local checks,
+remote GitHub Actions checks, and deployment verification. For future releases, review
+the diff, configure protected staging secrets, capture successful CI links/artifacts,
+then create a reviewed version tag after remote checks pass.
