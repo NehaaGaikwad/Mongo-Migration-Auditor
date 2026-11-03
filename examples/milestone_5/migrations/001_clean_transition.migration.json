@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {
+      "op": "create_index",
+      "keys": {"status": 1},
+      "name": "status_1",
+      "unique": false
+    },
+    {
+      "op": "add_field",
+      "field": "phone",
+      "required": false
+    }
+  ]
+}
+

@@ -1,0 +1,35 @@
+name: Staging MongoDB preflight
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    # Configure this protected GitHub Environment with approval rules and the
+    # MIGRATION_AUDITOR_PREFLIGHT_CONFIG secret. Do not run it on pull requests.
+    environment: staging-preflight
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install auditor
+        run: python -m pip install .
+      - name: Materialize protected configuration
+        shell: bash
+        env:
+          PREFLIGHT_CONFIG: ${{ secrets.MIGRATION_AUDITOR_PREFLIGHT_CONFIG }}
+        run: |
+          test -n "$PREFLIGHT_CONFIG"
+          umask 077
+          printf '%s' "$PREFLIGHT_CONFIG" > .migration-auditor-preflight.toml
+      - name: Run bounded read-only preflight
+        run: python -m migration_auditor check --config .migration-auditor-preflight.toml --format json
+      - name: Remove protected configuration
+        if: always()
+        run: rm -f .migration-auditor-preflight.toml

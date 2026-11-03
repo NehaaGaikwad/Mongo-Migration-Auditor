@@ -3,10 +3,11 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from pymongo.errors import DuplicateKeyError, ServerSelectionTimeoutError
+from pymongo.errors import DuplicateKeyError, OperationFailure, ServerSelectionTimeoutError
 
 from migration_auditor.audit_store import (
     AuditStoreConnectionError,
+    AuditStoreError,
     DuplicateRunError,
     MongoAuditStore,
     OfflineAuditStore,
@@ -40,6 +41,29 @@ class FakeCollection:
             if document.get("run_id") == query.get("run_id"):
                 return {key: value for key, value in document.items() if key != "_id"}
         return None
+
+    def find(self, query: dict[str, object], projection: dict[str, int]):
+        class Cursor(list):
+            def sort(self, field: str, direction: int):
+                assert (field, direction) == ("completed_at", -1)
+                return self
+
+            def limit(self, count: int):
+                return self[:count]
+
+        return Cursor(
+            {
+                key: value
+                for key, value in document.items()
+                if key in projection and projection[key]
+            }
+            for document in self.documents
+        )
+
+    def aggregate(self, pipeline: list[dict[str, object]], **kwargs: object):
+        assert kwargs == {"allowDiskUse": False}
+        assert "$group" in pipeline[0]
+        return [{"rule_id": "MONGO-DATA-002", "severity": "high", "count": 1}]
 
     def delete_many(self, query: dict[str, object]) -> None:
         self.documents[:] = [
@@ -139,3 +163,65 @@ def test_connection_failure_does_not_expose_uri(monkeypatch: pytest.MonkeyPatch)
         MongoAuditStore.connect(AuditStoreConfig(uri="mongodb://user:password@localhost:27017"))
 
     assert "password" not in str(error.value)
+
+
+def test_recent_runs_returns_sanitized_summaries() -> None:
+    client = FakeClient()
+    store = MongoAuditStore(client, enabled_config())  # type: ignore[arg-type]
+    store.persist(sample_stored_run())
+
+    runs = store.recent_runs()
+
+    assert runs[0]["run_id"] == "run-for-store-test"
+    assert runs[0]["completed_at"].endswith("+00:00")
+    assert "config_fingerprint" not in runs[0]
+    with pytest.raises(ValueError, match="1 through 100"):
+        store.recent_runs(0)
+
+
+def test_store_records_suppression_audit_details() -> None:
+    client = FakeClient()
+    store = MongoAuditStore(client, enabled_config())  # type: ignore[arg-type]
+    sample = sample_stored_run()
+    stored = StoredRun(
+        run=sample.run,
+        findings=sample.findings,
+        suppressed_findings=(
+            {
+                "finding_id": "a" * 24,
+                "suppression_reason": "Approved exception CAB-42",
+                "suppression_expires_on": "2099-01-01",
+            },
+        ),
+    )
+
+    store.persist(stored)
+
+    assert store.get_run(sample.run.run_id)["suppressed_findings"][0]["suppression_reason"] == "Approved exception CAB-42"
+
+
+def test_recurring_findings_returns_sanitized_rule_counts() -> None:
+    client = FakeClient()
+    store = MongoAuditStore(client, enabled_config())  # type: ignore[arg-type]
+
+    assert store.recurring_findings() == [
+        {"rule_id": "MONGO-DATA-002", "severity": "high", "count": 1}
+    ]
+    with pytest.raises(ValueError, match="1 through 100"):
+        store.recurring_findings(101)
+
+
+def test_interrupted_finding_write_compensates_the_partial_run() -> None:
+    class FailingFindings(FakeCollection):
+        def insert_many(self, documents: list[dict[str, object]], ordered: bool) -> None:
+            raise OperationFailure("simulated interrupted findings write")
+
+    client = FakeClient()
+    client.database.collections["audit_findings"] = FailingFindings()
+    store = MongoAuditStore(client, enabled_config())  # type: ignore[arg-type]
+
+    with pytest.raises(AuditStoreError, match="could not store audit findings"):
+        store.persist(sample_stored_run())
+
+    assert client.database["audit_runs"].documents == []
+    assert client.database["audit_findings"].documents == []

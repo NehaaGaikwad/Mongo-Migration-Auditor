@@ -50,15 +50,16 @@ class ProductStore:
             """)
         email, password = os.getenv("BOOTSTRAP_ADMIN_EMAIL"), os.getenv("BOOTSTRAP_ADMIN_PASSWORD")
         if os.getenv("SIMPLE_ADMIN_MODE", "false").lower() == "true":
-            email = email or os.getenv("SIMPLE_ADMIN_EMAIL", "admin@mongoauditor.local")
-            password = password or os.getenv("SIMPLE_ADMIN_PASSWORD", "Admin@12345!")
+            email = email or os.getenv("SIMPLE_ADMIN_EMAIL")
+            password = password or os.getenv("SIMPLE_ADMIN_PASSWORD")
         if email and password:
             with self._connect() as db:
                 if not db.execute("SELECT 1 FROM users WHERE email=?", (email.lower(),)).fetchone():
                     now = _now()
                     db.execute("INSERT INTO users VALUES (?,?,?,?,?,?,?,?)", (str(uuid4()), email.lower(), "Admin", self._hash_password(password), "admin", "active", now, now))
         if os.getenv("SIMPLE_ADMIN_MODE", "false").lower() == "true":
-            self._ensure_simple_workspace(email or "admin@mongoauditor.local")
+            if email:
+                self._ensure_simple_workspace(email)
 
     def _ensure_simple_workspace(self, email: str) -> None:
         """Create the one local owner/workspace used by the compact setup."""
@@ -181,7 +182,9 @@ class ProductStore:
             }
 
     def simple_context(self) -> tuple[dict[str, Any], dict[str, Any]] | None:
-        email = os.getenv("SIMPLE_ADMIN_EMAIL", os.getenv("BOOTSTRAP_ADMIN_EMAIL", "admin@mongoauditor.local"))
+        email = os.getenv("SIMPLE_ADMIN_EMAIL") or os.getenv("BOOTSTRAP_ADMIN_EMAIL")
+        if not email:
+            return None
         with self._connect() as db:
             user = db.execute("SELECT * FROM users WHERE email=?", (email.lower(),)).fetchone()
             org = db.execute("SELECT * FROM organizations WHERE slug='local-admin'").fetchone()

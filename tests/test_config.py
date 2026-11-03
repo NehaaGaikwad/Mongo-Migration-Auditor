@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -103,3 +104,68 @@ def test_config_rejects_non_string_audit_store_names(key: str) -> None:
         AuditorConfig.from_mapping(
             {"inputs": {"migration_paths": ["migrations"]}, "audit_store": {key: 123}}
         )
+
+
+def test_config_rejects_same_preflight_and_metadata_database_without_uri_leak() -> None:
+    raw = {
+        "inputs": {"migration_paths": ["migrations"]},
+        "audit_store": {"uri": "mongodb://meta:metadata-secret@LOCALHOST/metadata", "database": "app"},
+        "preflight": {"uri": "mongodb://target:target-secret@localhost:27017/other", "database": "app"},
+    }
+
+    with pytest.raises(ConfigurationError, match="different databases") as error:
+        AuditorConfig.from_mapping(raw)
+
+    assert "metadata-secret" not in str(error.value)
+    assert "target-secret" not in str(error.value)
+
+
+def test_config_accepts_different_databases_on_same_endpoint() -> None:
+    config = AuditorConfig.from_mapping(
+        {
+            "inputs": {"migration_paths": ["migrations"]},
+            "audit_store": {"uri": "mongodb://meta:secret@localhost/metadata", "database": "auditor_meta"},
+            "preflight": {"uri": "mongodb://ro:secret@localhost:27017/app", "database": "app_staging"},
+        }
+    )
+
+    assert config.preflight.enabled
+
+
+def test_config_accepts_only_precise_reasoned_expiring_suppressions() -> None:
+    config = AuditorConfig.from_mapping(
+        {
+            "inputs": {"migration_paths": ["migrations"]},
+            "suppressions": [
+                {
+                    "finding_id": "a" * 24,
+                    "reason": "Tracked rollout exception ABC-123",
+                    "expires_on": "2099-01-01",
+                }
+            ],
+        }
+    )
+
+    assert config.suppressions[0].expires_on == date(2099, 1, 1)
+
+
+@pytest.mark.parametrize(
+    "suppression",
+    [
+        {"finding_id": "not-an-id", "reason": "reason", "expires_on": "2099-01-01"},
+        {"finding_id": "a" * 24, "reason": "", "expires_on": "2099-01-01"},
+        {"finding_id": "a" * 24, "reason": "reason", "expires_on": "not-a-date"},
+    ],
+)
+def test_config_rejects_broad_or_unverifiable_suppressions(suppression: dict[str, str]) -> None:
+    with pytest.raises(ConfigurationError, match="suppression"):
+        AuditorConfig.from_mapping({"inputs": {"migration_paths": ["migrations"]}, "suppressions": [suppression]})
+
+
+def test_config_accepts_manifest_resource_limits() -> None:
+    config = AuditorConfig.from_mapping(
+        {"inputs": {"migration_paths": ["migrations"], "max_manifest_bytes": 100, "max_operations_per_manifest": 2}}
+    )
+
+    assert config.inputs.max_manifest_bytes == 100
+    assert config.inputs.max_operations_per_manifest == 2

@@ -1,4 +1,5 @@
 import json
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,13 @@ from migration_auditor.analysis import (
     analyze_operation,
     parse_manifest,
 )
-from migration_auditor.config import RuleConfig, load_config
+from migration_auditor.config import (
+    AuditorConfig,
+    InputConfig,
+    RuleConfig,
+    SuppressionConfig,
+    load_config,
+)
 from migration_auditor.models import SourceLocation
 
 
@@ -192,3 +199,69 @@ def test_milestone_four_malformed_operations_fail_closed(payload: dict[str, obje
     assert [finding.rule_id for finding in analyze_operation(operation, RuleConfig())] == [
         "MONGO-ANALYSIS-001"
     ]
+
+
+def test_exact_unexpired_suppression_is_reported_and_removed_from_policy_findings(tmp_path: Path) -> None:
+    manifest = tmp_path / "risk.migration.json"
+    manifest.write_text(
+        '{"version": 1, "collection": "users", "operations": [{"op": "drop_collection"}]}',
+        encoding="utf-8",
+    )
+    base = AuditorConfig(inputs=InputConfig(migration_paths=(manifest,)))
+    finding = analyze(base).findings[0]
+    config = AuditorConfig(
+        inputs=base.inputs,
+        suppressions=(
+            SuppressionConfig(
+                finding_id=finding.finding_id,
+                reason="Approved change window CAB-42",
+                expires_on=date(2099, 1, 1),
+            ),
+        ),
+    )
+
+    report = analyze(config)
+
+    assert report.findings == ()
+    assert report.suppressed_findings[0].reason == "Approved change window CAB-42"
+    assert report.to_dict()["suppressed_findings"][0]["finding_id"] == finding.finding_id
+
+
+def test_expired_or_unsafe_suppression_does_not_hide_a_finding(tmp_path: Path) -> None:
+    manifest = tmp_path / "unsupported.migration.json"
+    manifest.write_text(
+        '{"version": 1, "collection": "users", "operations": [{"op": "dynamic"}]}',
+        encoding="utf-8",
+    )
+    base = AuditorConfig(inputs=InputConfig(migration_paths=(manifest,)))
+    finding = analyze(base).findings[0]
+    config = AuditorConfig(
+        inputs=base.inputs,
+        suppressions=(
+            SuppressionConfig(
+                finding_id=finding.finding_id,
+                reason="Never accepted for unsupported input",
+                expires_on=date(2099, 1, 1),
+            ),
+        ),
+    )
+
+    report = analyze(config)
+
+    assert report.findings == (finding,)
+    assert report.suppressed_findings == ()
+
+
+def test_manifest_resource_limits_fail_closed(tmp_path: Path) -> None:
+    large = tmp_path / "large.migration.json"
+    large.write_text('{"version":1,"collection":"users","operations":[]}' + " " * 100, encoding="utf-8")
+    operations = tmp_path / "operations.migration.json"
+    operations.write_text(
+        '{"version":1,"collection":"users","operations":[{"op":"create_index","keys":{"id":1}},{"op":"create_index","keys":{"email":1}}]}',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(AnalysisError, match="byte limit"):
+        parse_manifest(large, max_bytes=20)
+    with pytest.raises(AnalysisError, match="operation limit"):
+        parse_manifest(operations, max_operations=1)

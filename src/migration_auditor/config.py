@@ -5,14 +5,17 @@ from __future__ import annotations
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import date
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 from migration_auditor.models import Severity
 
 KNOWN_RULE_IDS = frozenset(
     {
         "MONGO-ANALYSIS-001",
+        "MONGO-BASELINE-001",
         "MONGO-DATA-001",
         "MONGO-DATA-002",
         "MONGO-EXEC-001",
@@ -83,16 +86,54 @@ def _reject_unknown(mapping: Mapping[str, Any], allowed: set[str], name: str) ->
         raise ConfigurationError(f"{name} contains unsupported key(s): {joined}")
 
 
+def _connection_endpoint(uri: str) -> tuple[str, tuple[tuple[str, int | None], ...]]:
+    """Normalize MongoDB URI endpoints without retaining or reporting credentials."""
+    try:
+        parsed = urlsplit(uri)
+        scheme = parsed.scheme.lower()
+        authority = parsed.netloc.rsplit("@", 1)[-1]
+        hosts: list[tuple[str, int | None]] = []
+        for item in authority.split(","):
+            if item.startswith("["):
+                close = item.find("]")
+                if close < 0:
+                    raise ValueError
+                host = item[1:close].lower()
+                port_text = item[close + 1 :]
+                if port_text and not port_text.startswith(":"):
+                    raise ValueError
+                port = int(port_text[1:]) if port_text else None
+            else:
+                host, separator, port_text = item.partition(":")
+                host = host.lower().rstrip(".")
+                port = int(port_text) if separator else None
+            if not host or (port is not None and not 1 <= port <= 65535):
+                raise ValueError
+            if scheme == "mongodb" and port is None:
+                port = 27017
+            hosts.append((host, port))
+        if scheme not in {"mongodb", "mongodb+srv"} or not hosts:
+            raise ValueError
+        return scheme, tuple(sorted(hosts))
+    except (ValueError, TypeError):
+        # Never include the URI in this exception: it can contain credentials.
+        raise ConfigurationError("MongoDB connection URI is malformed") from None
+
+
 @dataclass(frozen=True)
 class InputConfig:
     """Repository inputs used by the future discovery/baseline stages."""
 
     migration_paths: tuple[Path, ...]
     baseline_path: Path | None = None
+    max_manifest_bytes: int = 1_000_000
+    max_operations_per_manifest: int = 10_000
 
     def __post_init__(self) -> None:
         if not self.migration_paths:
             raise ConfigurationError("inputs.migration_paths must not be empty")
+        _positive_int(self.max_manifest_bytes, "inputs.max_manifest_bytes")
+        _positive_int(self.max_operations_per_manifest, "inputs.max_operations_per_manifest")
 
 
 @dataclass(frozen=True)
@@ -124,6 +165,21 @@ class PolicyConfig:
     """Policy is separate from findings so severity can be configured without changing evidence."""
 
     fail_on: Severity = Severity.HIGH
+
+
+@dataclass(frozen=True)
+class SuppressionConfig:
+    """One exact, time-limited waiver for a suppressible finding."""
+
+    finding_id: str
+    reason: str
+    expires_on: date
+
+    def __post_init__(self) -> None:
+        if len(self.finding_id) != 24 or any(char not in "0123456789abcdef" for char in self.finding_id):
+            raise ConfigurationError("suppression.finding_id must be a 24-character lowercase finding ID")
+        if not self.reason.strip():
+            raise ConfigurationError("suppression.reason must be a non-empty string")
 
 
 @dataclass(frozen=True)
@@ -165,6 +221,31 @@ class AuditStoreConfig:
 
 
 @dataclass(frozen=True)
+class PreflightConfig:
+    """Optional bounded read-only checks against a staging/target database."""
+
+    uri: str | None = field(default=None, repr=False)
+    database: str | None = None
+    connect_timeout_ms: int = 5_000
+    server_selection_timeout_ms: int = 5_000
+    query_timeout_ms: int = 10_000
+    max_documents: int = 10_000
+    max_duplicate_groups: int = 10
+
+    def __post_init__(self) -> None:
+        if self.uri and not self.uri.startswith(("mongodb://", "mongodb+srv://")):
+            raise ConfigurationError("preflight.uri must start with mongodb:// or mongodb+srv://")
+        if bool(self.uri) != bool(self.database):
+            raise ConfigurationError("preflight.uri and preflight.database must be configured together")
+        for name in ("connect_timeout_ms", "server_selection_timeout_ms", "query_timeout_ms", "max_documents", "max_duplicate_groups"):
+            _positive_int(getattr(self, name), f"preflight.{name}")
+
+    @property
+    def enabled(self) -> bool:
+        return self.uri is not None and self.database is not None
+
+
+@dataclass(frozen=True)
 class AuditorConfig:
     """Complete normalized configuration contract for the auditor."""
 
@@ -172,15 +253,21 @@ class AuditorConfig:
     rules: RuleConfig = field(default_factory=RuleConfig)
     policy: PolicyConfig = field(default_factory=PolicyConfig)
     audit_store: AuditStoreConfig = field(default_factory=AuditStoreConfig)
+    preflight: PreflightConfig = field(default_factory=PreflightConfig)
+    suppressions: tuple[SuppressionConfig, ...] = ()
 
     @classmethod
     def from_mapping(cls, raw: Mapping[str, Any], *, base_path: Path = Path(".")) -> AuditorConfig:
-        _reject_unknown(raw, {"inputs", "rules", "policy", "audit_store"}, "configuration")
+        _reject_unknown(raw, {"inputs", "rules", "policy", "audit_store", "preflight", "suppressions"}, "configuration")
         if "inputs" not in raw:
             raise ConfigurationError("configuration requires an [inputs] table")
 
         inputs_raw = _require_mapping(raw["inputs"], "inputs")
-        _reject_unknown(inputs_raw, {"migration_paths", "baseline_path"}, "inputs")
+        _reject_unknown(
+            inputs_raw,
+            {"migration_paths", "baseline_path", "max_manifest_bytes", "max_operations_per_manifest"},
+            "inputs",
+        )
         if "migration_paths" not in inputs_raw:
             raise ConfigurationError("inputs.migration_paths is required")
         migration_paths = tuple(
@@ -189,7 +276,13 @@ class AuditorConfig:
         )
         baseline_value = _optional_string(inputs_raw.get("baseline_path"), "inputs.baseline_path")
         inputs = InputConfig(
-            migration_paths, (base_path / baseline_value).resolve() if baseline_value else None
+            migration_paths,
+            (base_path / baseline_value).resolve() if baseline_value else None,
+            _positive_int(inputs_raw.get("max_manifest_bytes", 1_000_000), "inputs.max_manifest_bytes"),
+            _positive_int(
+                inputs_raw.get("max_operations_per_manifest", 10_000),
+                "inputs.max_operations_per_manifest",
+            ),
         )
 
         rules_raw = _require_mapping(raw.get("rules", {}), "rules")
@@ -259,7 +352,44 @@ class AuditorConfig:
                 store_raw.get("retention_days", 90), "audit_store.retention_days"
             ),
         )
-        return cls(inputs=inputs, rules=rules, policy=policy, audit_store=audit_store)
+        preflight_raw = _require_mapping(raw.get("preflight", {}), "preflight")
+        _reject_unknown(preflight_raw, {"uri", "database", "connect_timeout_ms", "server_selection_timeout_ms", "query_timeout_ms", "max_documents", "max_duplicate_groups"}, "preflight")
+        preflight = PreflightConfig(
+            uri=_optional_string(preflight_raw.get("uri"), "preflight.uri"),
+            database=_optional_string(preflight_raw.get("database"), "preflight.database"),
+            **{key: _positive_int(preflight_raw.get(key, default), f"preflight.{key}") for key, default in (
+                ("connect_timeout_ms", 5_000), ("server_selection_timeout_ms", 5_000),
+                ("query_timeout_ms", 10_000), ("max_documents", 10_000), ("max_duplicate_groups", 10),
+            )},
+        )
+        if preflight.enabled and audit_store.enabled:
+            target = (_connection_endpoint(preflight.uri or ""), preflight.database)
+            metadata = (_connection_endpoint(audit_store.uri or ""), audit_store.database)
+            if target == metadata:
+                raise ConfigurationError(
+                    "preflight target and audit metadata must use different databases"
+                )
+        suppressions_raw = raw.get("suppressions", [])
+        if not isinstance(suppressions_raw, list):
+            raise ConfigurationError("suppressions must be an array of tables")
+        suppressions: list[SuppressionConfig] = []
+        for number, raw_suppression in enumerate(suppressions_raw, start=1):
+            suppression = _require_mapping(raw_suppression, f"suppressions[{number}]")
+            _reject_unknown(suppression, {"finding_id", "reason", "expires_on"}, f"suppressions[{number}]")
+            try:
+                expires_on = date.fromisoformat(_required_string(suppression.get("expires_on"), f"suppressions[{number}].expires_on"))
+            except ValueError as exc:
+                raise ConfigurationError(f"suppressions[{number}].expires_on must be an ISO date") from exc
+            suppressions.append(
+                SuppressionConfig(
+                    finding_id=_required_string(suppression.get("finding_id"), f"suppressions[{number}].finding_id"),
+                    reason=_required_string(suppression.get("reason"), f"suppressions[{number}].reason"),
+                    expires_on=expires_on,
+                )
+            )
+        if len({suppression.finding_id for suppression in suppressions}) != len(suppressions):
+            raise ConfigurationError("suppressions must not contain duplicate finding IDs")
+        return cls(inputs=inputs, rules=rules, policy=policy, audit_store=audit_store, preflight=preflight, suppressions=tuple(suppressions))
 
 
 def load_config(path: Path) -> AuditorConfig:

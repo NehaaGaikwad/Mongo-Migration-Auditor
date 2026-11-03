@@ -2,7 +2,7 @@
 
 A safety-focused CI/CD check for MongoDB migrations. The planned tool will inspect a deliberately small, documented subset of migration and schema/index inputs before deployment, identify known risks, and make uncertainty explicit.
 
-> **Project status:** Milestone 4 — the offline CLI now detects documented validator, field-compatibility, type-change, index-operational, destructive-operation, backfill-bound, and retry-idempotency risks in the safe declarative manifest subset. Baseline comparison, MongoDB preflight, and broader migration-framework support remain planned.
+> **Project status:** Milestone 6 — the offline CLI supports baseline-aware analysis, and optional bounded MongoDB preflight checks are available for explicitly configured staging databases.
 
 ## Why this exists
 
@@ -46,7 +46,7 @@ python -m pytest
 
 On macOS/Linux, activate the environment with `source .venv/bin/activate`.
 
-The runtime dependency is pinned in [pyproject.toml](pyproject.toml): PyMongo is used only when audit metadata persistence is explicitly enabled. Development dependencies are pinned there too for repeatability.
+The runtime dependency is pinned in [pyproject.toml](pyproject.toml): PyMongo is used only when optional audit metadata persistence or explicitly configured read-only preflight is enabled. Development dependencies are pinned there too for repeatability.
 
 ## Web application
 
@@ -129,16 +129,33 @@ A deliberately sanitized example is available in [docs/sample-audit-record.json]
 
 ### Optional disposable MongoDB integration test
 
-Start the local service as described below, then run the opt-in test against it:
+The audit-store integration test still uses `MIGRATION_AUDITOR_TEST_MONGODB_URI`.
+The preflight integration test uses two separate environment variables:
+
+- `MIGRATION_AUDITOR_TEST_MONGODB_FIXTURE_URI`: write-capable test-only identity for inserting synthetic fixtures and dropping the generated database.
+- `MIGRATION_AUDITOR_TEST_MONGODB_TARGET_URI`: read-only identity used by preflight and checked with a denied insert attempt.
+
+Both URIs must point to the same disposable test cluster. Because the database name
+is randomly generated on each run, the fixture identity needs database-creation and
+drop permissions on that test cluster, while the target identity needs read access
+to the generated database. Grant the target identity a read-only role such as
+`readAnyDatabase` only on a dedicated test cluster. Never use these broad test roles
+or credentials on production. Inject the values through a protected environment or
+secret manager rather than placing credentials in the repository or shell command
+history. Then run:
 
 ```powershell
-docker compose up -d mongo
-$env:MIGRATION_AUDITOR_TEST_MONGODB_URI = "mongodb://localhost:27017"
 python -m pytest -m integration
-Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_URI
+Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_FIXTURE_URI
+Remove-Item Env:MIGRATION_AUDITOR_TEST_MONGODB_TARGET_URI
 ```
 
-The test creates a randomly named database and drops only that generated database during cleanup. Regular `python -m pytest` skips this integration test when the environment variable is absent.
+The preflight test inserts fixtures through the fixture identity, verifies the target
+identity receives MongoDB authorization code 13 on an insert attempt, then runs
+preflight through that read-only target identity. Cleanup drops only the generated
+database through the fixture identity. Regular `python -m pytest` skips the live
+preflight test when either preflight URI is absent. Do not run it against production
+or a cluster containing data that is not disposable.
 
 ## CLI and supported migration manifests (Milestone 4)
 
@@ -149,6 +166,7 @@ migration-auditor version
 migration-auditor rules
 migration-auditor check --config migration-auditor.toml
 migration-auditor check --config migration-auditor.toml --format json
+migration-auditor history --config migration-auditor.toml --format json
 ```
 
 `python -m migration_auditor` is an equivalent entry point. The `check` command discovers `*.migration.json` files recursively below `inputs.migration_paths` and is fully offline. Every configured path must exist, explicit file paths must end in `.migration.json`, and at least one manifest must be discovered. An invalid config, empty/missing input, or malformed manifest returns exit code `2`; a recognized finding meeting `policy.fail_on` returns `1`; otherwise the command returns `0`.
@@ -193,6 +211,37 @@ them: `unsupported_operations_count` counts unknown/dynamic operations, while
 `malformed_operations_count` counts recognized operation names with invalid,
 ambiguous, or unsafe fields. Both are fail-closed findings and cause a policy failure
 regardless of the configured severity threshold; neither is a policy pass.
+
+## Reporting, policy, and audit history (Milestone 7)
+
+The `check` command returns stable text or JSON reports with file/operation context,
+rule ID, severity, confidence, evidence, remediation, and documentation links. Policy
+thresholds remain configured through `policy.fail_on`; unsupported or malformed input
+is always fail-closed.
+
+When `[audit_store].uri` is explicitly configured, each CLI check persists a sanitized
+run summary and its findings to the dedicated audit metadata database. JSON reports
+include a `persistence` status of `persisted`, `offline`, or `error`; persistence
+failure returns the analyzer-error exit code rather than silently claiming a recorded
+audit. `migration-auditor history --config migration-auditor.toml` lists recent
+sanitized run summaries (up to 100), while adding `--by-rule` returns recurring
+finding counts by rule and severity. Neither query returns connection credentials,
+raw configuration, or application documents.
+
+### Narrow, auditable suppressions
+
+Use `[[suppressions]]` only for a specific `finding_id` emitted by a prior report.
+Each entry requires a non-empty change/review reason and ISO-8601 `expires_on` date.
+Suppressed findings remain in `suppressed_findings` in the JSON report and persisted
+run record, including the reason and expiry, but do not affect the policy threshold.
+Expired entries do nothing. Unsupported or malformed input is never suppressible.
+
+```toml
+[[suppressions]]
+finding_id = "0123456789abcdef01234567"
+reason = "Approved rollout exception CAB-123"
+expires_on = "2027-01-31"
+```
 
 ### Practical MongoDB JSON aliases
 
@@ -251,6 +300,22 @@ docker compose ps
 The compose service exposes MongoDB only on `127.0.0.1:27017`. Stop it with `docker compose down`; add `--volumes` only when you deliberately want to discard its local data. Do not use production credentials or production data for development/tests.
 
 `.env` is ignored by Git. Its values are placeholders only; do not put a real connection string, password, access token, or application data in source control, test fixtures, logs, or issue reports.
+
+### Optional read-only preflight
+
+Set `[preflight].uri` and `[preflight].database` in a protected TOML config to enable
+checks; ordinary analysis remains offline if these are omitted. Use a dedicated MongoDB
+account with the built-in `read` role on the target database. The tool does not make
+the connection read-only by itself: MongoDB permissions enforce that boundary. Never
+reuse the audit metadata database credentials for the target database.
+
+Preflight checks duplicates for declared unique indexes and checks `$jsonSchema`
+required fields and supported scalar types for validator updates. Scans are bounded by
+`max_documents`, duplicate evidence by `max_duplicate_groups`, and query execution by
+`query_timeout_ms`. Reports label results `sampled`, `incomplete`, `unknown`, or
+`skipped`; sampled success does not mean the full collection was checked. See
+[`docs/architecture.md`](docs/architecture.md#mongodb-preflight) for the TOML example,
+least-privilege role guidance, and disposable integration procedure.
 
 ## Scope decisions
 
@@ -328,13 +393,27 @@ python -m pytest
 
 [.github/workflows/ci.yml](.github/workflows/ci.yml) runs both commands on pushes and pull requests across Python 3.11–3.14. It does not need MongoDB or secrets.
 
+The workflow also proves offline CI gate behavior for safe, warning, blocking, and
+analyzer-error fixtures. Optional staging preflight is a manually dispatched protected
+workflow; see [CI/CD integration](docs/ci-cd.md). It is never enabled for pull
+requests.
+
+For reviewer handoff, use the [repeatable demo](docs/demo.md),
+[troubleshooting guide](docs/troubleshooting.md), and
+[final implementation report](docs/final-report.md).
+
 ## Roadmap
 
 - **Milestone 1:** Repository, scope, reproducible setup — complete locally; publication evidence pending.
 - **Milestone 2:** Typed configuration, finding/run models, optional MongoDB audit store — complete locally; disposable-MongoDB evidence is opt-in.
 - **Milestone 3:** First CLI vertical slice using one documented input format — complete locally.
 - **Milestone 4:** Initial deterministic rule catalogue for Manifest v1 — complete locally.
-- **Milestones 5–10:** Baseline analysis, read-only preflight, reporting/policy, CI integration, evaluation, and handover.
+- **Milestone 5:** Baseline-aware migration analysis, diff engine, and sequential drift detection — complete locally.
+- **Milestone 6:** Read-only, bounded MongoDB preflight — complete locally.
+- **Milestone 7:** Reporting, policy, audited suppressions, and MongoDB audit history — complete locally.
+- **Milestone 8:** CI/CD integration — in progress locally; requires a pushed GitHub Actions run for completion evidence.
+- **Milestone 9:** Evaluation and hardening — in progress locally; see [evaluation evidence](docs/evaluation.md).
+- **Milestone 10:** Documentation, demo, and handover — complete locally; release tag and remote CI evidence remain pending a push.
 
 See the project master plan for the full acceptance criteria. Claims in this README reflect implemented work only.
 

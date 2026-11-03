@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Protocol
 
 from pymongo import ASCENDING, MongoClient
@@ -98,6 +99,7 @@ class MongoAuditStore:
         run_document = stored_run.run.to_dict() | {
             "started_at": stored_run.run.started_at,
             "completed_at": stored_run.run.completed_at,
+            "suppressed_findings": list(stored_run.suppressed_findings),
         }
         findings = [
             finding.to_dict()
@@ -128,6 +130,48 @@ class MongoAuditStore:
         except PyMongoError as exc:
             raise AuditStoreError("could not read audit run metadata") from exc
         return result
+
+    def recent_runs(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Return recent sanitized run summaries, never raw configuration or documents."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 through 100")
+        projection = {
+            "_id": 0,
+            "run_id": 1,
+            "analyzer_version": 1,
+            "started_at": 1,
+            "completed_at": 1,
+            "status": 1,
+            "files_analyzed": 1,
+            "findings_count": 1,
+            "unknown_operations_count": 1,
+        }
+        try:
+            runs = list(self._runs.find({}, projection).sort("completed_at", -1).limit(limit))
+        except PyMongoError as exc:
+            raise AuditStoreError("could not read recent audit run metadata") from exc
+        return [
+            {
+                key: value.isoformat() if isinstance(value, datetime) else value
+                for key, value in run.items()
+            }
+            for run in runs
+        ]
+
+    def recurring_findings(self, limit: int = 20) -> list[dict[str, Any]]:
+        """Aggregate recurring rules without returning customer document data."""
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 100:
+            raise ValueError("limit must be an integer from 1 through 100")
+        pipeline = [
+            {"$group": {"_id": {"rule_id": "$rule_id", "severity": "$severity"}, "count": {"$sum": 1}}},
+            {"$sort": {"count": -1, "_id.rule_id": 1, "_id.severity": 1}},
+            {"$limit": limit},
+            {"$project": {"_id": 0, "rule_id": "$_id.rule_id", "severity": "$_id.severity", "count": 1}},
+        ]
+        try:
+            return list(self._findings.aggregate(pipeline, allowDiskUse=False))
+        except PyMongoError as exc:
+            raise AuditStoreError("could not aggregate recurring audit findings") from exc
 
 
 def build_audit_store(config: AuditStoreConfig) -> AuditStore:

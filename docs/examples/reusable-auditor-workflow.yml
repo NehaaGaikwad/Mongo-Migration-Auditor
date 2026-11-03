@@ -1,0 +1,22 @@
+# Copy to a repository that contains a migration-auditor.toml and manifests.
+# Replace OWNER/REPOSITORY and pin to a reviewed release tag or commit SHA.
+name: Migration audit
+
+on:
+  pull_request:
+    paths:
+      - "migrations/**"
+      - "migration-auditor.toml"
+      - "schema-baseline.json"
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    uses: OWNER/REPOSITORY/.github/workflows/auditor-check.yml@v1
+    with:
+      config_path: migration-auditor.toml
+      python_version: "3.13"
+      auditor_repository: OWNER/REPOSITORY
+      auditor_ref: v1

@@ -6,10 +6,17 @@ import json
 import math
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from migration_auditor.config import AuditorConfig, RuleConfig
+from migration_auditor.baseline import (
+    BaselineDiff,
+    BaselineError,
+    BaselineStateTracker,
+    load_baseline,
+)
+from migration_auditor.config import AuditorConfig, RuleConfig, SuppressionConfig
 from migration_auditor.models import Confidence, Finding, Severity, SourceLocation
 
 MANIFEST_VERSION = 1
@@ -74,10 +81,23 @@ class Operation:
 
 
 @dataclass(frozen=True)
+class SuppressedFinding:
+    finding: Finding
+    reason: str
+    expires_on: str
+
+    def to_dict(self) -> dict[str, Any]:
+        return self.finding.to_dict() | {"suppression_reason": self.reason, "suppression_expires_on": self.expires_on}
+
+
+@dataclass(frozen=True)
 class AnalysisReport:
     files: tuple[Path, ...]
     findings: tuple[Finding, ...]
     errors: tuple[str, ...]
+    baseline_diffs: tuple[BaselineDiff, ...] = ()
+    preflight_checks: tuple[Any, ...] = ()
+    suppressed_findings: tuple[SuppressedFinding, ...] = ()
 
     @property
     def unsupported_count(self) -> int:
@@ -102,15 +122,26 @@ class AnalysisReport:
 
     @property
     def successful(self) -> bool:
-        return not self.errors
+        return not self.errors and not any(
+            check.status in {"incomplete", "unknown"} for check in self.preflight_checks
+        )
 
     def to_dict(self) -> dict[str, Any]:
+        if self.errors:
+            status = "error"
+        elif any(check.status in {"incomplete", "unknown"} for check in self.preflight_checks):
+            status = "incomplete"
+        else:
+            status = "completed"
         return {
-            "status": "completed" if self.successful else "error",
+            "status": status,
             "files_analyzed": len(self.files),
             "unsupported_operations_count": self.unsupported_count,
             "malformed_operations_count": self.malformed_count,
             "findings": [finding.to_dict() for finding in self.findings],
+            "suppressed_findings": [finding.to_dict() for finding in self.suppressed_findings],
+            "baseline_diffs": [diff.to_dict() for diff in self.baseline_diffs],
+            "preflight": [check.to_dict() for check in self.preflight_checks],
             "errors": list(self.errors),
         }
 
@@ -268,9 +299,13 @@ def _normalise_operation(raw: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]
     return canonical, payload
 
 
-def parse_manifest(path: Path) -> tuple[Operation, ...]:
+def parse_manifest(
+    path: Path, *, max_bytes: int = 1_000_000, max_operations: int = 10_000
+) -> tuple[Operation, ...]:
     """Parse one declarative JSON manifest without importing or executing any migration code."""
     try:
+        if path.stat().st_size > max_bytes:
+            raise AnalysisError(f"{_source_path(path)}: manifest exceeds configured byte limit")
         raw = json.loads(path.read_text(encoding="utf-8"))
     except OSError as exc:
         raise AnalysisError(f"{_source_path(path)}: could not read manifest") from exc
@@ -292,6 +327,8 @@ def parse_manifest(path: Path) -> tuple[Operation, ...]:
         raise AnalysisError(f"{_source_path(path)}: collection must be a non-empty string")
     if not isinstance(operations, list):
         raise AnalysisError(f"{_source_path(path)}: operations must be an array")
+    if len(operations) > max_operations:
+        raise AnalysisError(f"{_source_path(path)}: manifest exceeds configured operation limit")
 
     parsed: list[Operation] = []
     for number, operation in enumerate(operations, start=1):
@@ -531,7 +568,7 @@ def analyze_operation(operation: Operation, config: RuleConfig) -> tuple[Finding
                 _finding(
                     operation,
                     config,
-                rule_id="MONGO-DATA-002",
+                    rule_id="MONGO-DATA-002",
                     title="Destructive multi-document delete",
                     default_severity=Severity.HIGH,
                     confidence=Confidence.HIGH,
@@ -637,17 +674,113 @@ def analyze(config: AuditorConfig) -> AnalysisReport:
             errors.append(
                 f"configured migration input is not a .migration.json file: {_source_path(path)}"
             )
+
+    tracker: BaselineStateTracker | None = None
+    if config.inputs.baseline_path is not None:
+        if not config.inputs.baseline_path.exists():
+            errors.append(
+                f"configured baseline input not found: {_source_path(config.inputs.baseline_path)}"
+            )
+        else:
+            try:
+                baseline_schema = load_baseline(config.inputs.baseline_path)
+                tracker = BaselineStateTracker(baseline_schema)
+            except BaselineError as exc:
+                errors.append(str(exc))
+
     if not files and not errors:
         errors.append("no .migration.json manifests found in configured migration paths")
     for path in files:
         try:
-            operations = parse_manifest(path)
+            operations = parse_manifest(
+                path,
+                max_bytes=config.inputs.max_manifest_bytes,
+                max_operations=config.inputs.max_operations_per_manifest,
+            )
         except AnalysisError as exc:
             errors.append(str(exc))
             continue
         for operation in operations:
             findings.extend(analyze_operation(operation, config.rules))
-    return AnalysisReport(files=files, findings=tuple(findings), errors=tuple(errors))
+            if tracker is not None and operation.classification == "supported":
+                tracker.apply_operation(operation)
+
+    baseline_diffs: tuple[BaselineDiff, ...] = ()
+    if tracker is not None:
+        if _rule_enabled("MONGO-BASELINE-001", config.rules):
+            for finding in tracker.findings:
+                severity = _severity("MONGO-BASELINE-001", finding.severity, config.rules)
+                if severity != finding.severity:
+                    findings.append(
+                        Finding(
+                            finding_id=finding.finding_id,
+                            rule_id=finding.rule_id,
+                            title=finding.title,
+                            severity=severity,
+                            confidence=finding.confidence,
+                            explanation=finding.explanation,
+                            evidence=finding.evidence,
+                            remediation=finding.remediation,
+                            documentation_url=finding.documentation_url,
+                            suppressible=finding.suppressible,
+                            location=finding.location,
+                            collection=finding.collection,
+                            field=finding.field,
+                            index=finding.index,
+                        )
+                    )
+                else:
+                    findings.append(finding)
+        baseline_diffs = tracker.build_diffs()
+
+    preflight_checks: tuple[Any, ...] = ()
+    if config.preflight.enabled and not errors:
+        from migration_auditor.preflight import run_preflight
+
+        preflight_findings, preflight_checks = run_preflight(files, config.preflight)
+        findings.extend(preflight_findings)
+    else:
+        from migration_auditor.preflight import PreflightCheck
+
+        explanation = (
+            "Preflight was skipped because static manifest analysis reported errors."
+            if config.preflight.enabled
+            else "Preflight is not configured."
+        )
+        preflight_checks = (PreflightCheck("*", "connection", "skipped", explanation),)
+
+    active_findings, suppressed_findings = _apply_suppressions(findings, config.suppressions)
+    return AnalysisReport(
+        files=files,
+        findings=active_findings,
+        errors=tuple(errors),
+        baseline_diffs=baseline_diffs,
+        preflight_checks=preflight_checks,
+        suppressed_findings=suppressed_findings,
+    )
+
+
+def _apply_suppressions(
+    findings: list[Finding], suppressions: tuple[SuppressionConfig, ...]
+) -> tuple[tuple[Finding, ...], tuple[SuppressedFinding, ...]]:
+    """Apply only exact, still-valid waivers; unsafe findings remain unsuppressible."""
+    configured = {suppression.finding_id: suppression for suppression in suppressions}
+    today = datetime.now(UTC).date()
+    active: list[Finding] = []
+    suppressed: list[SuppressedFinding] = []
+    for finding in findings:
+        suppression = configured.get(finding.finding_id)
+        if suppression is None or suppression.expires_on < today or not finding.suppressible:
+            active.append(finding)
+        else:
+            suppressed.append(
+                SuppressedFinding(
+                    finding=finding,
+                    reason=suppression.reason,
+                    expires_on=suppression.expires_on.isoformat(),
+                )
+            )
+    return tuple(active), tuple(suppressed)
 
 
 RULES = (
@@ -668,6 +801,11 @@ RULES = (
     {"rule_id": "MONGO-SCHEMA-003", "title": "Field type change lacks a conversion plan", "default_severity": Severity.HIGH.value},
     {"rule_id": "MONGO-DATA-001", "title": "Backfill has no declared execution bounds", "default_severity": Severity.HIGH.value},
     {"rule_id": "MONGO-EXEC-001", "title": "Increment is not retry-idempotent", "default_severity": Severity.MEDIUM.value},
+    {
+        "rule_id": "MONGO-BASELINE-001",
+        "title": "Baseline drift: contradictory or unexpected state transition",
+        "default_severity": Severity.HIGH.value,
+    },
     {
         "rule_id": "MONGO-ANALYSIS-001",
         "title": "Unsupported migration operation",

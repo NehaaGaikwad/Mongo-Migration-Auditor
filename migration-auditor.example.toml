@@ -4,6 +4,9 @@
 [inputs]
 migration_paths = ["migrations"]
 baseline_path = "schema-baseline.json"
+# Fail closed before parsing unexpectedly large manifests or operation arrays.
+max_manifest_bytes = 1000000
+max_operations_per_manifest = 10000
 
 [rules]
 enabled = []
@@ -25,3 +28,25 @@ findings_collection = "audit_findings"
 server_selection_timeout_ms = 5000
 connect_timeout_ms = 5000
 retention_days = 90
+
+# With audit_store.uri configured, `migration-auditor check` persists sanitized runs
+# and `migration-auditor history --config migration-auditor.toml` lists summaries.
+
+# A suppression waives one exact, currently emitted suppressible finding only. It must
+# include an auditable reason and an ISO-8601 expiry; never suppress unsupported input.
+# [[suppressions]]
+# finding_id = "0123456789abcdef01234567"
+# reason = "Approved rollout exception CAB-123"
+# expires_on = "2027-01-31"
+
+[preflight]
+# Both values are required to enable target-database checks. Use a dedicated account
+# granted only the built-in `read` role on this staging database.
+# Never commit credentials; configure these in a protected local/CI config instead.
+uri = ""
+database = ""
+connect_timeout_ms = 5000
+server_selection_timeout_ms = 5000
+query_timeout_ms = 10000
+max_documents = 10000
+max_duplicate_groups = 10

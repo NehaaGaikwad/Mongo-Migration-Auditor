@@ -24,3 +24,15 @@ def test_login_never_returns_password_material(tmp_path) -> None:
     assert session["token"]
     assert "password_hash" not in session["user"]
     assert store.user_for_token(session["token"])["email"] == "person@example.com"
+
+
+def test_simple_admin_mode_never_creates_a_default_credential(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("SIMPLE_ADMIN_MODE", "true")
+    monkeypatch.delenv("BOOTSTRAP_ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("BOOTSTRAP_ADMIN_PASSWORD", raising=False)
+    monkeypatch.delenv("SIMPLE_ADMIN_EMAIL", raising=False)
+    monkeypatch.delenv("SIMPLE_ADMIN_PASSWORD", raising=False)
+
+    store = ProductStore(str(tmp_path / "product.sqlite3"))
+
+    assert store.simple_context() is None

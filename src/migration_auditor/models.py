@@ -235,7 +235,10 @@ class AuditRun:
 class StoredRun:
     run: AuditRun
     findings: tuple[Finding, ...]
+    suppressed_findings: tuple[dict[str, Any], ...] = ()
 
     def __post_init__(self) -> None:
         if self.run.findings_count != len(self.findings):
             raise ValueError("run.findings_count must equal the number of persisted findings")
+        if not all(isinstance(finding, dict) for finding in self.suppressed_findings):
+            raise ValueError("suppressed findings must be sanitized dictionaries")

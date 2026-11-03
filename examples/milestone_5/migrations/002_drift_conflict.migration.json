@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "collection": "users",
+  "operations": [
+    {
+      "op": "create_index",
+      "keys": {"email": 1},
+      "name": "duplicate_email_idx",
+      "unique": true
+    },
+    {
+      "op": "drop_index",
+      "name": "non_existent_idx"
+    }
+  ]
+}
+

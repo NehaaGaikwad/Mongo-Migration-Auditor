@@ -1,0 +1,5 @@
+[inputs]
+migration_paths = ["../migrations/001_safe.migration.json"]
+
+[policy]
+fail_on = "high"

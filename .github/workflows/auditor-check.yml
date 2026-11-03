@@ -1,0 +1,56 @@
+name: Reusable migration auditor check
+
+on:
+  workflow_call:
+    inputs:
+      config_path:
+        description: Repository-relative path to migration-auditor TOML configuration.
+        required: false
+        type: string
+        default: migration-auditor.toml
+      python_version:
+        description: Python version used to run the auditor.
+        required: false
+        type: string
+        default: "3.13"
+      auditor_repository:
+        description: Published repository that contains the auditor package.
+        required: false
+        type: string
+        default: NehaaGaikwad/Mongo-Migration-Auditor
+      auditor_ref:
+        description: Reviewed release tag or immutable commit SHA for the auditor.
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    name: Audit migration manifests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout caller repository
+        uses: actions/checkout@v4
+      - name: Checkout pinned auditor release
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.auditor_repository }}
+          ref: ${{ inputs.auditor_ref }}
+          path: .migration-auditor
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python_version }}
+          cache: pip
+      - name: Install auditor
+        run: python -m pip install ./.migration-auditor
+      - name: Run offline policy gate
+        run: python -m migration_auditor check --config "${{ inputs.config_path }}" --format json | tee migration-audit-report.json
+      - name: Upload JSON report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: migration-audit-report
+          path: migration-audit-report.json
+          if-no-files-found: warn

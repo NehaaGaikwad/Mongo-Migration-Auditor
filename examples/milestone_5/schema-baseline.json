@@ -1,0 +1,29 @@
+{
+  "version": 1,
+  "collections": {
+    "users": {
+      "validator": {
+        "$jsonSchema": {
+          "bsonType": "object",
+          "required": ["email", "status"],
+          "properties": {
+            "email": {"bsonType": "string"},
+            "status": {"bsonType": "string"}
+          }
+        }
+      },
+      "indexes": [
+        {
+          "name": "_id_",
+          "keys": {"_id": 1}
+        },
+        {
+          "name": "email_unique",
+          "keys": {"email": 1},
+          "unique": true
+        }
+      ]
+    }
+  }
+}
+

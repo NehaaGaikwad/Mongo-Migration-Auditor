@@ -28,6 +28,74 @@ def test_check_returns_zero_for_safe_manifest(tmp_path: Path, capsys: object) ->
     assert "Findings: 0" in capsys.readouterr().out  # type: ignore[attr-defined]
 
 
+def test_check_reports_offline_persistence_in_json(tmp_path: Path, capsys: object) -> None:
+    config = _write_config(
+        tmp_path,
+        '{"version": 1, "collection": "users", "operations": [{"op": "create_index", "keys": {"id": 1}}]}',
+    )
+
+    assert main(["check", "--config", str(config), "--format", "json"]) == EXIT_OK
+
+    assert json.loads(capsys.readouterr().out)["persistence"] == {
+        "status": "offline",
+        "error": None,
+    }
+
+
+def test_check_persists_when_audit_store_is_enabled(tmp_path: Path, capsys: object, monkeypatch) -> None:
+    import migration_auditor.cli as cli
+
+    config = _write_config(
+        tmp_path,
+        '{"version": 1, "collection": "users", "operations": [{"op": "create_index", "keys": {"id": 1}}]}',
+    )
+    config.write_text(config.read_text(encoding="utf-8") + "[audit_store]\nuri = \"mongodb://example.invalid\"\n", encoding="utf-8")
+    captured = {}
+
+    class Store:
+        def persist(self, stored_run):
+            captured["run"] = stored_run.run
+            captured["findings"] = stored_run.findings
+            return type("Result", (), {"persisted": True})()
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(cli, "build_audit_store", lambda _: Store())
+
+    assert main(["check", "--config", str(config), "--format", "json"]) == EXIT_OK
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["persistence"] == {"status": "persisted", "error": None}
+    assert captured["run"].files_analyzed == 1
+    assert captured["run"].config_fingerprint
+    assert captured["findings"] == ()
+    assert captured["closed"] is True
+
+
+def test_check_returns_analysis_error_for_persistence_failure(tmp_path: Path, capsys: object, monkeypatch) -> None:
+    import migration_auditor.cli as cli
+    from migration_auditor.audit_store import AuditStoreError
+
+    config = _write_config(
+        tmp_path,
+        '{"version": 1, "collection": "users", "operations": [{"op": "create_index", "keys": {"id": 1}}]}',
+    )
+    config.write_text(config.read_text(encoding="utf-8") + "[audit_store]\nuri = \"mongodb://example.invalid\"\n", encoding="utf-8")
+
+    def failed_store(_):
+        raise AuditStoreError("could not store audit run metadata")
+
+    monkeypatch.setattr(cli, "build_audit_store", failed_store)
+
+    assert main(["check", "--config", str(config), "--format", "json"]) == EXIT_ANALYSIS_ERROR
+    output = json.loads(capsys.readouterr().out)
+    assert output["persistence"] == {
+        "status": "error",
+        "error": "could not store audit run metadata",
+    }
+
+
 def test_check_returns_policy_failure_and_json_report(tmp_path: Path, capsys: object) -> None:
     config = _write_config(
         tmp_path,
@@ -78,3 +146,36 @@ def test_rules_and_version_commands(capsys: object) -> None:
     assert "MONGO-INDEX-001" in capsys.readouterr().out  # type: ignore[attr-defined]
     assert main(["version"]) == EXIT_OK
     assert capsys.readouterr().out.strip() == "0.1.0"  # type: ignore[attr-defined]
+
+
+def test_history_requires_explicit_audit_store(tmp_path: Path, capsys: object) -> None:
+    config = _write_config(
+        tmp_path,
+        '{"version": 1, "collection": "users", "operations": []}',
+    )
+
+    assert main(["history", "--config", str(config), "--format", "json"]) == EXIT_ANALYSIS_ERROR
+    assert "audit history requires audit_store.uri" in json.loads(capsys.readouterr().out)["errors"][0]
+
+
+def test_history_by_rule_uses_aggregate_query(tmp_path: Path, capsys: object, monkeypatch) -> None:
+    import migration_auditor.cli as cli
+
+    config = _write_config(tmp_path, '{"version": 1, "collection": "users", "operations": []}')
+    config.write_text(config.read_text(encoding="utf-8") + '[audit_store]\nuri = "mongodb://example.invalid"\n', encoding="utf-8")
+
+    class Store:
+        def recurring_findings(self, limit):
+            assert limit == 20
+            return [{"rule_id": "MONGO-DATA-002", "severity": "high", "count": 2}]
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(cli, "build_audit_store", lambda _: Store())
+    monkeypatch.setattr(cli, "MongoAuditStore", Store)
+
+    assert main(["history", "--config", str(config), "--by-rule", "--format", "json"]) == EXIT_OK
+    assert json.loads(capsys.readouterr().out) == {
+        "recurring_findings": [{"rule_id": "MONGO-DATA-002", "severity": "high", "count": 2}]
+    }
